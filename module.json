@@ -10,8 +10,8 @@
     },
     "authors": [
         {
-            "name": "Your Name",
-            "url": "https://github.com/yourusername"
+            "name": "Jonathon Dawes",
+            "url": "https://github.com/jonathondawes"
         }
     ],
     "esmodules": [
@@ -20,7 +20,7 @@
     "styles": [],
     "languages": [],
     "socket": false,
-    "url": "https://github.com/yourusername/auto-xp",
-    "manifest": "https://raw.githubusercontent.com/yourusername/auto-xp/main/module.json",
-    "download": "https://github.com/yourusername/auto-xp/releases/download/v1.0.0/module.zip"
+    "url": "https://github.com/jonathondawes/auto-xp",
+    "manifest": "https://raw.githubusercontent.com/jonathondawes/auto-xp/main/module.json",
+    "download": "https://github.com/jonathondawes/auto-xp/releases/download/v1.0.0/module.zip"
 } 
