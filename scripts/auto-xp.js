@@ -7,13 +7,16 @@ class AutoXP {
 
         // Listen for combat end
         Hooks.on('combatComplete', async (combat) => {
+            console.log('Auto XP Calculator | Combat Complete hook triggered');
             await this.calculateAndDistributeXP(combat);
         });
 
         // Listen for combat state changes
         Hooks.on('updateCombat', async (combat, update, options, userId) => {
+            console.log('Auto XP Calculator | Combat Update hook triggered', update);
             // Check if combat is being ended
             if (update.combatState === 0) {  // 0 means combat is ended
+                console.log('Auto XP Calculator | Combat state changed to ended');
                 await this.calculateAndDistributeXP(combat);
             }
         });
@@ -21,17 +24,24 @@ class AutoXP {
 
     static async calculateAndDistributeXP(combat) {
         try {
+            console.log('Auto XP Calculator | Starting XP calculation');
+            
             // Get all combatants that are defeated (assuming they're enemies)
             const defeatedCombatants = combat.combatants.filter(c => c.defeated);
+            console.log('Auto XP Calculator | Defeated combatants:', defeatedCombatants);
             
             // Calculate total XP from defeated enemies
             let totalXP = 0;
             for (const combatant of defeatedCombatants) {
                 const actor = combatant.actor;
+                console.log('Auto XP Calculator | Checking combatant:', actor?.name);
                 if (actor && actor.system?.details?.xp?.value) {
+                    console.log('Auto XP Calculator | Found XP value:', actor.system.details.xp.value);
                     totalXP += actor.system.details.xp.value;
                 }
             }
+
+            console.log('Auto XP Calculator | Total XP calculated:', totalXP);
 
             if (totalXP === 0) {
                 console.log('Auto XP Calculator | No XP to distribute');
@@ -44,6 +54,7 @@ class AutoXP {
                 !c.defeated && 
                 c.actor.hasPlayerOwner
             );
+            console.log('Auto XP Calculator | Player characters found:', playerCharacters);
 
             if (playerCharacters.length === 0) {
                 console.log('Auto XP Calculator | No player characters found in combat');
@@ -52,6 +63,7 @@ class AutoXP {
 
             // Calculate XP per player (rounded up)
             const xpPerPlayer = Math.ceil(totalXP / playerCharacters.length);
+            console.log('Auto XP Calculator | XP per player:', xpPerPlayer);
 
             // Update each player's XP
             for (const pc of playerCharacters) {
@@ -59,6 +71,7 @@ class AutoXP {
                 if (actor) {
                     const currentXP = actor.system?.details?.xp?.value || 0;
                     const newXP = currentXP + xpPerPlayer;
+                    console.log('Auto XP Calculator | Updating XP for', actor.name, 'from', currentXP, 'to', newXP);
                     
                     await actor.update({
                         'system.details.xp.value': newXP
