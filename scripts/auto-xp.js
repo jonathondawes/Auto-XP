@@ -1,126 +1,162 @@
 class AutoXP {
     static init() {
         // Register the module
-        Hooks.on('ready', () => {
+        Hooks.once('init', () => {
             console.log('Auto XP Calculator | Initializing');
+            this.system = game.system.id;
+            console.log('Auto XP Calculator | Detected system:', this.system);
         });
 
-        // Listen for combat updates
+        // Handle combat updates
         Hooks.on('updateCombat', async (combat, update, options, userId) => {
             console.log('Auto XP Calculator | Combat Update:', {
                 combatId: combat.id,
-                update: update,
-                combatState: combat.started,
+                update,
+                active: combat.active,
                 round: combat.round,
-                turn: combat.turn
+                turn: combat.turn,
+                started: combat.started
             });
 
             // Check if combat is being ended
-            if (update.started === false) {  // Combat is being ended
-                console.log('Auto XP Calculator | Combat is being ended');
+            if (update.hasOwnProperty('started') && !update.started) {
+                console.log('Auto XP Calculator | Combat ended, processing XP...');
                 await this.calculateAndDistributeXP(combat);
             }
         });
 
-        // Listen for combat end
-        Hooks.on('combatComplete', async (combat) => {
-            console.log('Auto XP Calculator | Combat Complete hook triggered');
+        // Handle combatant updates
+        Hooks.on('updateCombatant', (combatant, update, options, userId) => {
+            // Get the actual combatant data
+            const combatantData = combatant.parent.combatants.get(combatant.id);
+            
+            console.log('Auto XP Calculator | Combatant Update:', {
+                combatantId: combatantData.id,
+                combatantName: combatantData.name,
+                actorName: combatantData.actor?.name,
+                actorType: combatantData.actor?.type,
+                update,
+                defeated: update.defeated,
+                currentDefeated: combatantData.defeated
+            });
+        });
+
+        // Handle combat deletion
+        Hooks.on('deleteCombat', async (combat, options, userId) => {
+            console.log('Auto XP Calculator | Combat deleted, processing XP...');
             await this.calculateAndDistributeXP(combat);
         });
 
-        // Listen for combatant updates
-        Hooks.on('updateCombatant', (combat, combatant, update, options, userId) => {
-            console.log('Auto XP Calculator | Combatant Update:', {
-                combatantName: combatant.actor?.name,
-                update: update,
-                defeated: combatant.defeated
-            });
+        // Handle combat end
+        Hooks.on('combatComplete', async (combat) => {
+            console.log('Auto XP Calculator | Combat Complete hook triggered');
+            await this.calculateAndDistributeXP(combat);
         });
     }
 
     static async calculateAndDistributeXP(combat) {
         try {
-            console.log('Auto XP Calculator | Starting XP calculation');
+            console.log('Auto XP Calculator | Starting XP processing...');
             
-            // Get all combatants that are defeated (assuming they're enemies)
-            const defeatedCombatants = combat.combatants.filter(c => c.defeated);
-            console.log('Auto XP Calculator | Defeated combatants:', defeatedCombatants.map(c => c.actor?.name));
-            
-            // Calculate total XP from defeated enemies
-            let totalXP = 0;
-            for (const combatant of defeatedCombatants) {
-                const actor = combatant.actor;
-                console.log('Auto XP Calculator | Checking combatant:', actor?.name);
-                
-                // Get XP from PF2e system
-                if (actor && actor.system?.details?.level?.value) {
-                    const level = actor.system.details.level.value;
-                    // PF2e XP values by level
-                    const xpValues = {
-                        1: 10, 2: 15, 3: 20, 4: 30, 5: 40,
-                        6: 60, 7: 80, 8: 120, 9: 160, 10: 240,
-                        11: 320, 12: 480, 13: 640, 14: 960, 15: 1280,
-                        16: 1920, 17: 2560, 18: 3840, 19: 5120, 20: 7680
-                    };
-                    const xp = xpValues[level] || 0;
-                    console.log('Auto XP Calculator | Found XP value:', xp, 'for level', level);
-                    totalXP += xp;
-                }
-            }
+            // Get all combatants
+            const combatants = Array.from(combat.combatants);
+            console.log('Auto XP Calculator | Found combatants:', combatants.map(c => ({
+                id: c.id,
+                name: c.name,
+                defeated: c.defeated,
+                actorName: c.actor?.name,
+                actorType: c.actor?.type,
+                system: c.actor?.system
+            })));
 
-            console.log('Auto XP Calculator | Total XP calculated:', totalXP);
-
-            if (totalXP === 0) {
-                console.log('Auto XP Calculator | No XP to distribute');
-                return;
-            }
-
-            // Get all player characters in the combat
-            const playerCharacters = combat.combatants.filter(c => 
-                c.actor?.type === 'character' && 
-                !c.defeated && 
-                c.actor.hasPlayerOwner
+            // Get all player characters
+            const players = combatants.filter(c => 
+                c.actor?.type === 'character'
             );
-            console.log('Auto XP Calculator | Player characters found:', playerCharacters.map(c => c.actor?.name));
+            console.log('Auto XP Calculator | Player characters:', players.map(p => ({
+                name: p.name,
+                actorName: p.actor?.name,
+                id: p.actor?.id,
+                system: p.actor?.system
+            })));
 
-            if (playerCharacters.length === 0) {
+            if (players.length === 0) {
                 console.log('Auto XP Calculator | No player characters found in combat');
                 return;
             }
 
-            // Calculate XP per player (rounded up)
-            const xpPerPlayer = Math.ceil(totalXP / playerCharacters.length);
+            // Get encounter XP based on system
+            let encounterXP = 0;
+            
+            if (this.system === 'pf2e') {
+                // Pathfinder 2E XP calculation
+                const analysis = combat.analyze();
+                console.log('Auto XP Calculator | PF2E Combat Analysis:', analysis);
+                encounterXP = analysis?.award?.xp || 0;
+            } else if (this.system === 'dnd5e') {
+                // D&D 5E XP calculation
+                const defeatedEnemies = combatants.filter(c => 
+                    c.actor?.type === 'npc' && c.defeated
+                );
+                console.log('Auto XP Calculator | D&D 5E Defeated Enemies:', defeatedEnemies);
+                
+                // Sum up XP from defeated enemies
+                encounterXP = defeatedEnemies.reduce((total, enemy) => {
+                    const xp = enemy.actor?.system?.details?.xp?.value || 0;
+                    return total + xp;
+                }, 0);
+            }
+
+            console.log('Auto XP Calculator | Encounter XP:', encounterXP);
+
+            if (encounterXP === 0) {
+                console.log('Auto XP Calculator | No XP to distribute');
+                return;
+            }
+
+            // Calculate XP per player (rounding up)
+            const xpPerPlayer = Math.ceil(encounterXP / players.length);
             console.log('Auto XP Calculator | XP per player:', xpPerPlayer);
 
-            // Update each player's XP
-            for (const pc of playerCharacters) {
-                const actor = pc.actor;
-                if (actor) {
-                    const currentXP = actor.system?.details?.xp?.value || 0;
-                    const newXP = currentXP + xpPerPlayer;
-                    console.log('Auto XP Calculator | Updating XP for', actor.name, 'from', currentXP, 'to', newXP);
-                    
-                    await actor.update({
-                        'system.details.xp.value': newXP
-                    });
+            // Distribute XP to each player
+            for (const player of players) {
+                try {
+                    let currentXP = 0;
+                    let updatePath = '';
 
-                    // Notify the player
-                    const playerName = actor.name;
-                    const message = `${playerName} earned ${xpPerPlayer} XP!`;
-                    ChatMessage.create({
-                        user: game.user.id,
-                        content: message,
-                        speaker: ChatMessage.getSpeaker()
+                    // Get current XP based on system
+                    if (this.system === 'pf2e') {
+                        currentXP = player.actor?.system?.details?.xp?.value || 0;
+                        updatePath = 'system.details.xp.value';
+                    } else if (this.system === 'dnd5e') {
+                        currentXP = player.actor?.system?.details?.xp?.value || 0;
+                        updatePath = 'system.details.xp.value';
+                    }
+
+                    const newXP = currentXP + xpPerPlayer;
+                    console.log(`Auto XP Calculator | Updating ${player.name}'s XP:`, {
+                        current: currentXP,
+                        adding: xpPerPlayer,
+                        new: newXP,
+                        system: player.actor?.system
                     });
+                    
+                    await player.actor.update({
+                        [updatePath]: newXP
+                    });
+                    
+                    console.log(`Auto XP Calculator | Successfully updated ${player.name}'s XP`);
+                } catch (error) {
+                    console.error(`Auto XP Calculator | Error updating XP for ${player.name}:`, error);
                 }
             }
 
-            // Show total XP notification
-            ChatMessage.create({
-                user: game.user.id,
-                content: `Total XP earned: ${totalXP} (${xpPerPlayer} per player)`,
-                speaker: ChatMessage.getSpeaker()
-            });
+            // Show notification
+            if (encounterXP > 0) {
+                const message = `Combat complete! ${encounterXP} XP distributed (${xpPerPlayer} XP per player)`;
+                console.log('Auto XP Calculator | Showing notification:', message);
+                ui.notifications.info(message);
+            }
 
         } catch (error) {
             console.error('Auto XP Calculator | Error calculating XP:', error);
