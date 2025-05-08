@@ -13,15 +13,16 @@ class AutoXP {
         // Listen for combat updates
         Hooks.on('updateCombat', async (combat, update, options, userId) => {
             console.log('Auto XP Calculator | Combat Update:', {
-                combat: combat,
+                combatId: combat.id,
                 update: update,
-                options: options,
-                userId: userId
+                combatState: combat.started,
+                round: combat.round,
+                turn: combat.turn
             });
 
             // Check if combat is being ended
-            if (update.combatState === 0) {  // 0 means combat is ended
-                console.log('Auto XP Calculator | Combat state changed to ended');
+            if (update.started === false) {  // Combat is being ended
+                console.log('Auto XP Calculator | Combat is being ended');
                 await this.calculateAndDistributeXP(combat);
             }
         });
@@ -35,10 +36,9 @@ class AutoXP {
         // Listen for combatant updates
         Hooks.on('updateCombatant', (combat, combatant, update, options, userId) => {
             console.log('Auto XP Calculator | Combatant Update:', {
-                combatant: combatant,
+                combatantName: combatant.actor?.name,
                 update: update,
-                options: options,
-                userId: userId
+                defeated: combatant.defeated
             });
         });
 
@@ -54,7 +54,7 @@ class AutoXP {
             
             // Get all combatants that are defeated (assuming they're enemies)
             const defeatedCombatants = combat.combatants.filter(c => c.defeated);
-            console.log('Auto XP Calculator | Defeated combatants:', defeatedCombatants);
+            console.log('Auto XP Calculator | Defeated combatants:', defeatedCombatants.map(c => c.actor?.name));
             
             // Calculate total XP from defeated enemies
             let totalXP = 0;
@@ -80,7 +80,7 @@ class AutoXP {
                 !c.defeated && 
                 c.actor.hasPlayerOwner
             );
-            console.log('Auto XP Calculator | Player characters found:', playerCharacters);
+            console.log('Auto XP Calculator | Player characters found:', playerCharacters.map(c => c.actor?.name));
 
             if (playerCharacters.length === 0) {
                 console.log('Auto XP Calculator | No player characters found in combat');
