@@ -5,20 +5,46 @@ class AutoXP {
             console.log('Auto XP Calculator | Initializing');
         });
 
+        // Listen for combat creation
+        Hooks.on('createCombat', (combat) => {
+            console.log('Auto XP Calculator | Combat Created:', combat);
+        });
+
+        // Listen for combat updates
+        Hooks.on('updateCombat', async (combat, update, options, userId) => {
+            console.log('Auto XP Calculator | Combat Update:', {
+                combat: combat,
+                update: update,
+                options: options,
+                userId: userId
+            });
+
+            // Check if combat is being ended
+            if (update.combatState === 0) {  // 0 means combat is ended
+                console.log('Auto XP Calculator | Combat state changed to ended');
+                await this.calculateAndDistributeXP(combat);
+            }
+        });
+
         // Listen for combat end
         Hooks.on('combatComplete', async (combat) => {
             console.log('Auto XP Calculator | Combat Complete hook triggered');
             await this.calculateAndDistributeXP(combat);
         });
 
-        // Listen for combat state changes
-        Hooks.on('updateCombat', async (combat, update, options, userId) => {
-            console.log('Auto XP Calculator | Combat Update hook triggered', update);
-            // Check if combat is being ended
-            if (update.combatState === 0) {  // 0 means combat is ended
-                console.log('Auto XP Calculator | Combat state changed to ended');
-                await this.calculateAndDistributeXP(combat);
-            }
+        // Listen for combatant updates
+        Hooks.on('updateCombatant', (combat, combatant, update, options, userId) => {
+            console.log('Auto XP Calculator | Combatant Update:', {
+                combatant: combatant,
+                update: update,
+                options: options,
+                userId: userId
+            });
+        });
+
+        // Listen for combat deletion
+        Hooks.on('deleteCombat', (combat) => {
+            console.log('Auto XP Calculator | Combat Deleted:', combat);
         });
     }
 
