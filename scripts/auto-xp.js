@@ -9,6 +9,14 @@ class AutoXP {
         Hooks.on('combatComplete', async (combat) => {
             await this.calculateAndDistributeXP(combat);
         });
+
+        // Listen for combat state changes
+        Hooks.on('updateCombat', async (combat, update, options, userId) => {
+            // Check if combat is being ended
+            if (update.combatState === 0) {  // 0 means combat is ended
+                await this.calculateAndDistributeXP(combat);
+            }
+        });
     }
 
     static async calculateAndDistributeXP(combat) {
@@ -83,4 +91,4 @@ class AutoXP {
 // Initialize the module
 Hooks.once('init', () => {
     AutoXP.init();
-}); 
+});
