@@ -25,7 +25,7 @@ A Foundry VTT module that automatically calculates and distributes XP after comb
 
 1. In Foundry VTT, go to the "Add-on Modules" tab
 2. Click "Install Module"
-3. Enter the following URL: `https://github.com/yourusername/auto-xp/releases/latest/download/module.zip`
+3. Enter the following URL: `https://github.com/jonathondawes/auto-xp/releases/latest/download/module.zip`
 4. Click "Install"
 5. Enable the module in your world settings
 
