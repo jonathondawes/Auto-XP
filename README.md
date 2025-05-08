@@ -27,7 +27,7 @@ The module works automatically! When a combat encounter ends:
 
 ## Requirements
 
-- Foundry VTT version 10 or higher
+- Foundry VTT version 10 or higher (verified for version 13)
 - A game system that uses the standard XP system (D&D 5e, Pathfinder, etc.)
 
 ## License
