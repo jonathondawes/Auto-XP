@@ -5,11 +5,6 @@ class AutoXP {
             console.log('Auto XP Calculator | Initializing');
         });
 
-        // Listen for combat creation
-        Hooks.on('createCombat', (combat) => {
-            console.log('Auto XP Calculator | Combat Created:', combat);
-        });
-
         // Listen for combat updates
         Hooks.on('updateCombat', async (combat, update, options, userId) => {
             console.log('Auto XP Calculator | Combat Update:', {
@@ -41,11 +36,6 @@ class AutoXP {
                 defeated: combatant.defeated
             });
         });
-
-        // Listen for combat deletion
-        Hooks.on('deleteCombat', (combat) => {
-            console.log('Auto XP Calculator | Combat Deleted:', combat);
-        });
     }
 
     static async calculateAndDistributeXP(combat) {
@@ -61,9 +51,20 @@ class AutoXP {
             for (const combatant of defeatedCombatants) {
                 const actor = combatant.actor;
                 console.log('Auto XP Calculator | Checking combatant:', actor?.name);
-                if (actor && actor.system?.details?.xp?.value) {
-                    console.log('Auto XP Calculator | Found XP value:', actor.system.details.xp.value);
-                    totalXP += actor.system.details.xp.value;
+                
+                // Get XP from PF2e system
+                if (actor && actor.system?.details?.level?.value) {
+                    const level = actor.system.details.level.value;
+                    // PF2e XP values by level
+                    const xpValues = {
+                        1: 10, 2: 15, 3: 20, 4: 30, 5: 40,
+                        6: 60, 7: 80, 8: 120, 9: 160, 10: 240,
+                        11: 320, 12: 480, 13: 640, 14: 960, 15: 1280,
+                        16: 1920, 17: 2560, 18: 3840, 19: 5120, 20: 7680
+                    };
+                    const xp = xpValues[level] || 0;
+                    console.log('Auto XP Calculator | Found XP value:', xp, 'for level', level);
+                    totalXP += xp;
                 }
             }
 
