@@ -7,3 +7,4 @@
 - XP distribution among player characters
 - Rounding up of XP values
 - Chat notifications for XP gains 
+- Updated correct URL for install
