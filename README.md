@@ -1,11 +1,11 @@
 # Auto XP Calculator
 
-A Foundry VTT module that automatically calculates and distributes XP after combat encounters for both Pathfinder 2E and D&D 5E.
+A Foundry VTT module that automatically calculates and distributes XP after combat encounters. This module only currently supports PF2e
 
 ## Features
 
 - Automatically calculates XP after combat encounters
-- Supports both Pathfinder 2E and D&D 5E systems
+- Supports Pathfinder 2E
 - Distributes XP evenly among player characters
 - Rounds up XP values to ensure no XP is lost
 - Provides in-game notifications about XP distribution
@@ -16,10 +16,6 @@ A Foundry VTT module that automatically calculates and distributes XP after comb
 - Uses the built-in encounter analysis to determine XP values
 - Distributes XP based on the encounter's award value
 
-### D&D 5E
-- Calculates XP based on defeated NPCs
-- Sums up the XP values of all defeated enemies
-- Distributes the total XP among player characters
 
 ## Installation
 
