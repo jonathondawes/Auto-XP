@@ -16,6 +16,8 @@ A Foundry VTT module that automatically calculates and distributes XP after comb
 - Uses the built-in encounter analysis to determine XP values
 - Distributes XP based on the encounter's award value
 
+## DnD 5e
+- Coming soon
 
 ## Installation
 
@@ -33,9 +35,7 @@ The module works automatically - no configuration needed! When a combat ends:
 3. Updates each character's XP value
 4. Shows a notification with the total XP and amount per player
 
-## License
-
-This module is licensed under the MIT License - see the LICENSE file for details.
+Note: Combat must be tracked using the foundry combat tracker for this module to work correctly. 
 
 ## Contributing
 
