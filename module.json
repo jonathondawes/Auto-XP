@@ -20,9 +20,9 @@
     "styles": [],
     "languages": [],
     "system": ["pf2e", "dnd5e"],
-    "url": "https://github.com/jonathondawes/auto-xp",
-    "manifest": "https://raw.githubusercontent.com/jonathondawes/auto-xp/main/module.json",
-    "download": "https://github.com/jonathondawes/auto-xp/releases/latest/download/module.zip",
-    "readme": "https://github.com/jonathondawes/auto-xp/blob/main/README.md",
-    "changelog": "https://github.com/jonathondawes/auto-xp/blob/main/CHANGELOG.md"
+    "url": "https://github.com/jonathondawes/Auto-XP",
+    "manifest": "https://raw.githubusercontent.com/jonathondawes/Auto-XP/main/module.json",
+    "download": "https://github.com/jonathondawes/Auto-XP/releases/latest/download/module.zip",
+    "readme": "https://github.com/jonathondawes/Auto-XP/blob/main/README.md",
+    "changelog": "https://github.com/jonathondawes/Auto-XP/blob/main/CHANGELOG.md"
 } 
