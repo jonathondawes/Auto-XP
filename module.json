@@ -10,8 +10,8 @@
     },
     "authors": [
         {
-            "name": "Your Name",
-            "url": "https://github.com/yourusername"
+            "name": "Jonathan Dawes",
+            "url": "https://github.com/jonathondawes"
         }
     ],
     "esmodules": [
@@ -21,8 +21,8 @@
     "languages": [],
     "system": ["pf2e", "dnd5e"],
     "url": "https://github.com/jonathondawes/auto-xp",
-    "manifest": "https://raw.githubusercontent.com/yourusername/auto-xp/main/module.json",
-    "download": "https://github.com/yourusername/auto-xp/releases/latest/download/module.zip",
-    "readme": "https://github.com/yourusername/auto-xp/blob/main/README.md",
-    "changelog": "https://github.com/yourusername/auto-xp/blob/main/CHANGELOG.md"
+    "manifest": "https://raw.githubusercontent.com/jonathondawes/auto-xp/main/module.json",
+    "download": "https://github.com/jonathondawes/auto-xp/releases/latest/download/module.zip",
+    "readme": "https://github.com/jonathondawes/auto-xp/blob/main/README.md",
+    "changelog": "https://github.com/jonathondawes/auto-xp/blob/main/CHANGELOG.md"
 } 
