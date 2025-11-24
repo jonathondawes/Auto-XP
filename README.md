@@ -5,16 +5,17 @@ A Foundry VTT module that automatically calculates and distributes XP after comb
 ## Features
 
 - Automatically calculates XP after combat encounters
-- Supports Pathfinder 2E
-- Distributes XP evenly among player characters
-- Rounds up XP values to ensure no XP is lost
+- Supports Pathfinder 2E encounter XP rules
+- Awards the full PF2e XP value to every player character
+- Uses the PF2e level-difference table instead of static creature XP
 - Provides in-game notifications about XP distribution
 
 ## System Support
 
 ### Pathfinder 2E
-- Uses the built-in encounter analysis to determine XP values
-- Distributes XP based on the encounter's award value
+- When a combat encounter is ended (or deleted), the module totals the XP value of each defeated creature or hazard using the official PF2e level-difference table.
+- The party level is derived from the average character level (rounded to the nearest whole level) to keep XP calculations in sync with the Core Rulebook.
+- The computed XP is added directly to every unique player character sheet—no dialogs, splitting, or manual updates required.
 
 ## DnD 5e
 - Coming soon
