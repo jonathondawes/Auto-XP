@@ -23,12 +23,14 @@ Hooks.once('ready', () => {
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
+    if (!game.user.isGM) return;
     if (!shouldHandleCombat()) return;
     if (!combatEnded(update)) return;
     await processCombatXP(combat);
 });
 
 Hooks.on('deleteCombat', async (combat) => {
+    if (!game.user.isGM) return;
     if (!shouldHandleCombat()) return;
     await processCombatXP(combat, { skipFlag: true });
 });
@@ -46,6 +48,9 @@ function combatEnded(update) {
 }
 
 async function processCombatXP(combat, { skipFlag = false } = {}) {
+    if (combat.xpProcessing) return;
+    combat.xpProcessing = true;
+
     try {
         if (combat.getFlag(MODULE_ID, 'xpAwarded')) {
             console.log('Auto XP Calculator | XP already awarded for this combat');
@@ -57,6 +62,9 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
         if (!xpPerCharacter || !players.length) {
             if (!xpPerCharacter) {
                 console.log('Auto XP Calculator | No XP to award');
+                if (defeatedCreatures.length > 0) {
+                     ui.notifications.warn(`Auto XP: Creatures defeated but 0 XP calculated. Check levels.`);
+                }
             }
             if (!players.length) {
                 console.warn('Auto XP Calculator | No player characters found to award XP');
@@ -101,6 +109,8 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
         }
     } catch (error) {
         console.error('Auto XP Calculator | Failed to process combat XP', error);
+    } finally {
+        combat.xpProcessing = false;
     }
 }
 
@@ -108,7 +118,13 @@ function calculateEncounterXP(combat) {
     const combatants = Array.from(combat.combatants ?? []);
     const players = getUniquePlayerActors(combatants);
     const defeatedCreatures = combatants
-        .filter(c => c.defeated && ['npc', 'hazard'].includes(c.actor?.type))
+        .filter(c => {
+            if (!['npc', 'hazard'].includes(c.actor?.type)) return false;
+            const isDefeated = c.defeated;
+            const hp = c.actor?.system?.attributes?.hp?.value;
+            const isDead = hp !== undefined && hp <= 0;
+            return isDefeated || isDead;
+        })
         .map(c => ({
             id: c.id,
             name: c.name,

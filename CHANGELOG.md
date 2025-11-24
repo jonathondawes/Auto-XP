@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2025-11-24
+### Fixed
+- Restricted XP calculation to GM only to prevent duplicate awards
+- Added fallback check for 0 HP to detect defeated creatures
+- Added race condition protection for combat updates
+- Added warning notification when 0 XP is calculated
+
 ## [1.1.0] - 2025-11-24
 ### Added
 - Automatic XP calculation that mirrors the PF2e encounter XP table
