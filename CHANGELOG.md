@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.2] - 2025-12-30
+### Fixed
+- Fixed issue where XP was not awarded for combatants deleted from the tracker before combat end.
+- Added "Banked XP" system to store data of deleted defeated combatants.
+
 ## [1.1.1] - 2025-11-24
 ### Fixed
 - Restricted XP calculation to GM only to prevent duplicate awards

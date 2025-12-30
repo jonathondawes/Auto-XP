@@ -35,6 +35,37 @@ Hooks.on('deleteCombat', async (combat) => {
     await processCombatXP(combat, { skipFlag: true });
 });
 
+Hooks.on('deleteCombatant', async (combatant, context, userId) => {
+    if (!game.user.isGM) return;
+    if (!shouldHandleCombat()) return;
+
+    const combat = combatant.combat;
+    if (!combat) return;
+
+    // Check if it's a valid enemy (NPC/Hazard)
+    if (!['npc', 'hazard'].includes(combatant.actor?.type)) return;
+
+    // Check if it was defeated or dead
+    const isDefeated = combatant.defeated;
+    const hp = combatant.actor?.system?.attributes?.hp?.value;
+    const isDead = hp !== undefined && hp <= 0;
+
+    if (isDefeated || isDead) {
+        const bankedCreature = {
+            id: combatant.id,
+            name: combatant.name,
+            level: Number(combatant.actor.system.details.level?.value ?? 0),
+            type: combatant.actor.type
+        };
+
+        const existingBank = combat.getFlag(MODULE_ID, 'banked-xp') || [];
+        existingBank.push(bankedCreature);
+
+        await combat.setFlag(MODULE_ID, 'banked-xp', existingBank);
+        console.log(`Auto XP Calculator | Banked XP for deleted combatant: ${combatant.name}`);
+    }
+});
+
 function shouldHandleCombat() {
     return game.system.id === 'pf2e';
 }
@@ -63,7 +94,7 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
             if (!xpPerCharacter) {
                 console.log('Auto XP Calculator | No XP to award');
                 if (defeatedCreatures.length > 0) {
-                     ui.notifications.warn(`Auto XP: Creatures defeated but 0 XP calculated. Check levels.`);
+                    ui.notifications.warn(`Auto XP: Creatures defeated but 0 XP calculated. Check levels.`);
                 }
             }
             if (!players.length) {
@@ -133,13 +164,17 @@ function calculateEncounterXP(combat) {
             actor: c.actor
         }));
 
+    // Add banked creatures (deleted during combat)
+    const bankedCreatures = combat.getFlag(MODULE_ID, 'banked-xp') || [];
+    const allDefeatedCreatures = [...defeatedCreatures, ...bankedCreatures];
+
     const partyLevel = calculatePartyLevel(players);
-    const xpPerCharacter = defeatedCreatures.reduce((total, creature) => {
+    const xpPerCharacter = allDefeatedCreatures.reduce((total, creature) => {
         const diff = creature.level - partyLevel;
         return total + getXPForLevelDifference(diff);
     }, 0);
 
-    return { xpPerCharacter, players, defeatedCreatures, partyLevel };
+    return { xpPerCharacter, players, defeatedCreatures: allDefeatedCreatures, partyLevel };
 }
 
 function calculatePartyLevel(players) {

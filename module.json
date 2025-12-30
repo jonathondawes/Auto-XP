@@ -2,7 +2,7 @@
     "id": "auto-xp",
     "title": "Auto XP Calculator",
     "description": "Automatically calculates and distributes XP after combat encounters for Pathfinder 2E",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "compatibility": {
         "minimum": "10",
         "verified": "11",
