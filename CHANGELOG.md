@@ -6,6 +6,7 @@
 - Added D&D 5e support
 - Added banked XP system to store data of deleted defeated combatants
 - Added support for banked XP in combat end detection
+- Added player toast notifications to inform players of XP awards
 
 ### Fixed
 - Fixed issue where XP was not awarded for combatants deleted from the tracker before combat end.

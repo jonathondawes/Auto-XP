@@ -109,6 +109,22 @@ Hooks.once('ready', () => {
     } else {
         console.warn('Auto XP Calculator | Unsupported system');
     }
+
+    // Socket listener for player notifications
+    game.socket.on('module.auto-xp', (data) => {
+        if (data.type === 'xp-award') {
+            if (game.user.isGM) return; // GM already got the notification
+
+            const myActors = data.actorIds
+                .map(id => game.actors.get(id))
+                .filter(actor => actor && actor.isOwner);
+
+            if (myActors.length > 0) {
+                const names = myActors.map(a => a.name).join(', ');
+                ui.notifications.info(`Auto XP: ${names} received ${data.amount} XP.`);
+            }
+        }
+    });
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
@@ -201,6 +217,14 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
         }
 
         ui.notifications.info(`Auto XP: Awarded ${xpPerCharacter} XP to ${players.length} character(s).`);
+
+        // Notify players via socket
+        const actorIds = players.map(p => p.actor.id);
+        game.socket.emit('module.auto-xp', {
+            type: 'xp-award',
+            amount: xpPerCharacter,
+            actorIds: actorIds
+        });
 
         if (!skipFlag) {
             await markCombatProcessed(combat);
