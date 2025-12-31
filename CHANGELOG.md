@@ -1,5 +1,18 @@
 # Changelog
 
+
+## [1.2.0] - 2025-12-31
+### Added
+- Added D&D 5e support
+- Added banked XP system to store data of deleted defeated combatants
+- Added support for banked XP in combat end detection
+
+### Fixed
+- Fixed issue where XP was not awarded for combatants deleted from the tracker before combat end.
+- Fixed issue where XP was awarded to NPC's at the end of encounters.
+- Fixed XP calculation to use the correct system XP value, taken from system combat tracker. 
+- Added "Banked XP" system to store data of deleted defeated combatants.
+
 ## [1.1.2] - 2025-12-30
 ### Fixed
 - Fixed issue where XP was not awarded for combatants deleted from the tracker before combat end.
