@@ -1,8 +1,8 @@
 {
     "id": "auto-xp",
     "title": "Auto XP Calculator",
-    "description": "Automatically calculates and distributes XP after combat encounters for Pathfinder 2E",
-    "version": "1.1.2",
+    "description": "Automatically calculates and distributes XP after combat encounters for Pathfinder 2E and DnD 5e",
+    "version": "1.2.0",
     "compatibility": {
         "minimum": "10",
         "verified": "11",
@@ -19,7 +19,8 @@
     "styles": [],
     "languages": [],
     "system": [
-        "pf2e"
+        "pf2e",
+        "dnd5e"
     ],
     "url": "https://github.com/jonathondawes/Auto-XP",
     "manifest": "https://github.com/jonathondawes/Auto-XP/raw/main/module.json",

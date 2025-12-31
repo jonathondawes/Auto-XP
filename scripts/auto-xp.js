@@ -1,49 +1,139 @@
 const MODULE_ID = 'auto-xp';
 
-const XP_BY_LEVEL_DIFF = new Map([
-    [-4, 10],
-    [-3, 15],
-    [-2, 20],
-    [-1, 30],
-    [0, 40],
-    [1, 60],
-    [2, 80],
-    [3, 120],
-    [4, 160],
-    [5, 240],
-    [6, 320],
-    [7, 480],
-    [8, 640],
-    [9, 960],
-    [10, 1280]
-]);
+// --- System Handlers ---
+
+class SystemHandler {
+    get isValid() { return false; }
+
+    getCreatureData(combatant) {
+        throw new Error('Not implemented');
+    }
+
+    /**
+     * Calculates the XP to be awarded to EACH character.
+     * @param {Combat} combat - The current combat encounter
+     * @param {Array} players - List of player actors
+     * @param {Array} defeatedCreatures - List of defeated enemies
+     * @returns {Object} { xpPerCharacter: number }
+     */
+    calculateXP(combat, players, defeatedCreatures) {
+        throw new Error('Not implemented');
+    }
+
+    async updatePlayerXP(actor, amount) {
+        throw new Error('Not implemented');
+    }
+}
+
+class PF2eHandler extends SystemHandler {
+    get isValid() { return game.system.id === 'pf2e'; }
+
+    getCreatureData(combatant) {
+        // PF2e uses combat.metrics for calculation, but we still track defeated for logging/bank
+        return {
+            id: combatant.id,
+            name: combatant.name,
+            level: Number(combatant.actor.system.details.level?.value ?? 0),
+            type: combatant.actor.type
+        };
+    }
+
+    calculateXP(combat, players, defeatedCreatures) {
+        // PF2e System automatically calculates the XP award for the encounter.
+        // We defer to the system's calculation to ensure it matches the UI.
+        const systemXP = combat.metrics?.award?.xp;
+
+        if (systemXP !== undefined) {
+            return { xpPerCharacter: systemXP };
+        }
+
+        // Fallback or if metrics are missing (shouldn't happen in updated PF2e systems)
+        console.warn('Auto XP | Could not find combat.metrics.award.xp, defaulting to 0');
+        return { xpPerCharacter: 0 };
+    }
+
+    async updatePlayerXP(actor, amount) {
+        const currentXP = actor.system.details.xp?.value || 0;
+        const newXP = currentXP + amount;
+        await actor.update({ 'system.details.xp.value': newXP });
+        return { currentXP, newXP };
+    }
+}
+
+class DnD5eHandler extends SystemHandler {
+    get isValid() { return game.system.id === 'dnd5e'; }
+
+    getCreatureData(combatant) {
+        return {
+            id: combatant.id,
+            name: combatant.name,
+            xp: Number(combatant.actor.system.details.xp?.value ?? 0),
+            type: combatant.actor.type
+        };
+    }
+
+    calculateXP(combat, players, defeatedCreatures) {
+        if (!players.length) return { xpPerCharacter: 0 };
+
+        const totalMonsterXP = defeatedCreatures.reduce((total, creature) => {
+            return total + (creature.xp || 0);
+        }, 0);
+
+        // Standard 5e: Total XP divided by number of party members
+        const xpPerCharacter = Math.floor(totalMonsterXP / players.length);
+
+        return { xpPerCharacter };
+    }
+
+    async updatePlayerXP(actor, amount) {
+        const currentXP = actor.system.details.xp?.value || 0;
+        const newXP = currentXP + amount;
+        await actor.update({ 'system.details.xp.value': newXP });
+        return { currentXP, newXP };
+    }
+}
+
+// --- Main Module Logic ---
+
+let systemHandler = null;
 
 Hooks.once('ready', () => {
-    console.log('Auto XP Calculator | Ready');
+    if (game.system.id === 'pf2e') {
+        systemHandler = new PF2eHandler();
+    } else if (game.system.id === 'dnd5e') {
+        systemHandler = new DnD5eHandler();
+    }
+
+    if (systemHandler) {
+        console.log(`Auto XP Calculator | Ready (${game.system.id})`);
+    } else {
+        console.warn('Auto XP Calculator | Unsupported system');
+    }
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
     if (!game.user.isGM) return;
-    if (!shouldHandleCombat()) return;
+    if (!systemHandler) return;
     if (!combatEnded(update)) return;
     await processCombatXP(combat);
 });
 
 Hooks.on('deleteCombat', async (combat) => {
     if (!game.user.isGM) return;
-    if (!shouldHandleCombat()) return;
+    if (!systemHandler) return;
     await processCombatXP(combat, { skipFlag: true });
 });
 
 Hooks.on('deleteCombatant', async (combatant, context, userId) => {
     if (!game.user.isGM) return;
-    if (!shouldHandleCombat()) return;
+    if (!systemHandler) return;
 
     const combat = combatant.combat;
     if (!combat) return;
 
     // Check if it's a valid enemy (NPC/Hazard)
-    if (!['npc', 'hazard'].includes(combatant.actor?.type)) return;
+    const validTypes = ['npc', 'hazard'];
+    if (!validTypes.includes(combatant.actor?.type)) return;
 
     // Check if it was defeated or dead
     const isDefeated = combatant.defeated;
@@ -51,12 +141,7 @@ Hooks.on('deleteCombatant', async (combatant, context, userId) => {
     const isDead = hp !== undefined && hp <= 0;
 
     if (isDefeated || isDead) {
-        const bankedCreature = {
-            id: combatant.id,
-            name: combatant.name,
-            level: Number(combatant.actor.system.details.level?.value ?? 0),
-            type: combatant.actor.type
-        };
+        const bankedCreature = systemHandler.getCreatureData(combatant);
 
         const existingBank = combat.getFlag(MODULE_ID, 'banked-xp') || [];
         existingBank.push(bankedCreature);
@@ -65,10 +150,6 @@ Hooks.on('deleteCombatant', async (combatant, context, userId) => {
         console.log(`Auto XP Calculator | Banked XP for deleted combatant: ${combatant.name}`);
     }
 });
-
-function shouldHandleCombat() {
-    return game.system.id === 'pf2e';
-}
 
 function combatEnded(update) {
     if (!update) return false;
@@ -88,45 +169,31 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
             return;
         }
 
-        const { xpPerCharacter, players, defeatedCreatures, partyLevel } = calculateEncounterXP(combat);
+        const { xpPerCharacter, players, defeatedCreatures } = calculateEncounterXP(combat);
 
-        if (!xpPerCharacter || !players.length) {
-            if (!xpPerCharacter) {
-                console.log('Auto XP Calculator | No XP to award');
-                if (defeatedCreatures.length > 0) {
-                    ui.notifications.warn(`Auto XP: Creatures defeated but 0 XP calculated. Check levels.`);
-                }
+        if (!players.length) {
+            console.warn('Auto XP Calculator | No player characters found to award XP');
+            if (!skipFlag) await markCombatProcessed(combat);
+            return;
+        }
+
+        if (xpPerCharacter === 0) {
+            console.log('Auto XP Calculator | No XP to award (calculated 0)');
+            if (defeatedCreatures.length > 0) {
+                // In PF2e with system metrics, 0 might be valid (trivial encounter), so we log but don't warn loudly
             }
-            if (!players.length) {
-                console.warn('Auto XP Calculator | No player characters found to award XP');
-            }
-            if (!skipFlag) {
-                await markCombatProcessed(combat);
-            }
+            if (!skipFlag) await markCombatProcessed(combat);
             return;
         }
 
         console.log('Auto XP Calculator | Awarding XP:', {
             xpPerCharacter,
-            partyLevel,
-            defeatedCreatures: defeatedCreatures.map(c => ({
-                id: c.id,
-                name: c.name,
-                level: c.level,
-                type: c.type
-            })),
-            players: players.map(p => ({
-                id: p.actor.id,
-                name: p.name,
-                level: p.level
-            }))
+            playersLength: players.length
         });
 
         for (const player of players) {
             try {
-                const currentXP = player.actor.system.details.xp?.value || 0;
-                const newXP = currentXP + xpPerCharacter;
-                await player.actor.update({ 'system.details.xp.value': newXP });
+                const { currentXP, newXP } = await systemHandler.updatePlayerXP(player.actor, xpPerCharacter);
                 console.log(`Auto XP Calculator | Updated XP for ${player.name}`, { currentXP, xpPerCharacter, newXP });
             } catch (error) {
                 console.error(`Auto XP Calculator | Failed to update XP for ${player.name}`, error);
@@ -148,50 +215,28 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
 function calculateEncounterXP(combat) {
     const combatants = Array.from(combat.combatants ?? []);
     const players = getUniquePlayerActors(combatants);
+
+    // PF2e & 5e common logic: filter for defeated/dead NPCs/Hazards
     const defeatedCreatures = combatants
         .filter(c => {
-            if (!['npc', 'hazard'].includes(c.actor?.type)) return false;
+            const validTypes = ['npc', 'hazard'];
+            if (!validTypes.includes(c.actor?.type)) return false;
             const isDefeated = c.defeated;
             const hp = c.actor?.system?.attributes?.hp?.value;
             const isDead = hp !== undefined && hp <= 0;
             return isDefeated || isDead;
         })
-        .map(c => ({
-            id: c.id,
-            name: c.name,
-            level: Number(c.actor.system.details.level?.value ?? 0),
-            type: c.actor.type,
-            actor: c.actor
-        }));
+        .map(c => systemHandler.getCreatureData(c));
 
     // Add banked creatures (deleted during combat)
     const bankedCreatures = combat.getFlag(MODULE_ID, 'banked-xp') || [];
     const allDefeatedCreatures = [...defeatedCreatures, ...bankedCreatures];
 
-    const partyLevel = calculatePartyLevel(players);
-    const xpPerCharacter = allDefeatedCreatures.reduce((total, creature) => {
-        const diff = creature.level - partyLevel;
-        return total + getXPForLevelDifference(diff);
-    }, 0);
-
-    return { xpPerCharacter, players, defeatedCreatures: allDefeatedCreatures, partyLevel };
-}
-
-function calculatePartyLevel(players) {
-    if (!players.length) return 1;
-    const totalLevels = players.reduce((total, player) => {
-        const level = Number(player.level ?? 1);
-        return total + level;
-    }, 0);
-
-    const average = totalLevels / players.length;
-    return Math.max(1, Math.floor(average + 0.5));
-}
-
-function getXPForLevelDifference(diff) {
-    if (diff <= -5) return 0;
-    if (diff >= 10) diff = 10;
-    return XP_BY_LEVEL_DIFF.get(diff) ?? 0;
+    return {
+        ...systemHandler.calculateXP(combat, players, allDefeatedCreatures),
+        players,
+        defeatedCreatures: allDefeatedCreatures
+    };
 }
 
 function getUniquePlayerActors(combatants) {
@@ -199,9 +244,11 @@ function getUniquePlayerActors(combatants) {
     const players = [];
     for (const combatant of combatants) {
         const actor = combatant.actor;
-        if (!actor || actor.type !== 'character') continue;
+        // Fix: Check for player ownership to avoid awarding XP to NPC allies
+        if (!actor || actor.type !== 'character' || !actor.hasPlayerOwner) continue;
         if (seenActors.has(actor.id)) continue;
         seenActors.add(actor.id);
+
         players.push({
             actor,
             name: actor.name ?? combatant.name,
