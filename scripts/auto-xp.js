@@ -1,5 +1,47 @@
 const MODULE_ID = 'auto-xp';
 
+// --- Deduplication guard ---
+// A module-level Set is used instead of a plain property on the combat object.
+// Plain properties are lost if the combat object is re-fetched from the server;
+// a module-level Set persists for the lifetime of the session.
+const _processingCombats = new Set();
+
+// --- D&D 5e XP Thresholds ---
+// Index = current character level. Value = total XP required to reach the next level.
+const DND5E_LEVEL_THRESHOLDS = [
+    0,       // index 0: unused
+    300,     // level 1  → 2
+    900,     // level 2  → 3
+    2700,    // level 3  → 4
+    6500,    // level 4  → 5
+    14000,   // level 5  → 6
+    23000,   // level 6  → 7
+    34000,   // level 7  → 8
+    48000,   // level 8  → 9
+    64000,   // level 9  → 10
+    85000,   // level 10 → 11
+    100000,  // level 11 → 12
+    120000,  // level 12 → 13
+    140000,  // level 13 → 14
+    165000,  // level 14 → 15
+    195000,  // level 15 → 16
+    225000,  // level 16 → 17
+    265000,  // level 17 → 18
+    305000,  // level 18 → 19
+    355000,  // level 19 → 20
+];
+
+// --- D&D 5e Encounter Difficulty Multiplier Table ---
+// Source: D&D 5e Dungeon Master's Guide, "Encounter Multipliers" table.
+const DND5E_ENCOUNTER_MULTIPLIERS = [
+    { max: 1,        multiplier: 1   },
+    { max: 2,        multiplier: 1.5 },
+    { max: 6,        multiplier: 2   },
+    { max: 10,       multiplier: 2.5 },
+    { max: 14,       multiplier: 3   },
+    { max: Infinity, multiplier: 4   },
+];
+
 // --- System Handlers ---
 
 class SystemHandler {
@@ -20,6 +62,12 @@ class SystemHandler {
         throw new Error('Not implemented');
     }
 
+    /**
+     * Updates a single actor's XP total.
+     * @param {Actor} actor
+     * @param {number} amount
+     * @returns {Promise<{currentXP: number, newXP: number, leveledUp: boolean}>}
+     */
     async updatePlayerXP(actor, amount) {
         throw new Error('Not implemented');
     }
@@ -39,7 +87,7 @@ class PF2eHandler extends SystemHandler {
     }
 
     calculateXP(combat, players, defeatedCreatures) {
-        // PF2e System automatically calculates the XP award for the encounter.
+        // PF2e automatically calculates the XP award for the encounter.
         // We defer to the system's calculation to ensure it matches the UI.
         const systemXP = combat.metrics?.award?.xp;
 
@@ -47,8 +95,10 @@ class PF2eHandler extends SystemHandler {
             return { xpPerCharacter: systemXP };
         }
 
-        // Fallback or if metrics are missing (shouldn't happen in updated PF2e systems)
-        console.warn('Auto XP | Could not find combat.metrics.award.xp, defaulting to 0');
+        // Surface the fallback as an in-game warning, not just a console message
+        const msg = 'Auto XP | Could not retrieve XP from combat.metrics — XP was not awarded. Please award manually.';
+        console.warn(msg);
+        ui.notifications.warn(msg);
         return { xpPerCharacter: 0 };
     }
 
@@ -56,7 +106,8 @@ class PF2eHandler extends SystemHandler {
         const currentXP = actor.system.details.xp?.value || 0;
         const newXP = currentXP + amount;
         await actor.update({ 'system.details.xp.value': newXP });
-        return { currentXP, newXP };
+        // PF2e handles level advancement automatically; no detection needed here.
+        return { currentXP, newXP, leveledUp: false };
     }
 }
 
@@ -79,9 +130,20 @@ class DnD5eHandler extends SystemHandler {
             return total + (creature.xp || 0);
         }, 0);
 
-        // Standard 5e: Total XP divided by number of party members
-        const xpPerCharacter = Math.floor(totalMonsterXP / players.length);
+        // Apply the official 5e encounter difficulty multiplier (DMG p.82) if enabled
+        const applyMultiplier = game.settings.get(MODULE_ID, 'dnd5e-encounter-multiplier');
+        let adjustedXP = totalMonsterXP;
 
+        if (applyMultiplier && defeatedCreatures.length > 0) {
+            const monsterCount = defeatedCreatures.length;
+            const entry = DND5E_ENCOUNTER_MULTIPLIERS.find(e => monsterCount <= e.max);
+            const multiplier = entry ? entry.multiplier : 4;
+            adjustedXP = Math.floor(totalMonsterXP * multiplier);
+            console.log(`Auto XP Calculator | 5e encounter multiplier: ×${multiplier} (${monsterCount} monsters)`);
+        }
+
+        // Standard 5e: adjusted XP divided evenly among party members
+        const xpPerCharacter = Math.floor(adjustedXP / players.length);
         return { xpPerCharacter };
     }
 
@@ -89,31 +151,109 @@ class DnD5eHandler extends SystemHandler {
         const currentXP = actor.system.details.xp?.value || 0;
         const newXP = currentXP + amount;
         await actor.update({ 'system.details.xp.value': newXP });
-        return { currentXP, newXP };
+
+        // Level-up detection: check if newXP crosses the threshold for the next level
+        let leveledUp = false;
+        const currentLevel = Number(actor.system.details.level ?? 1);
+        if (currentLevel < 20) {
+            const threshold = DND5E_LEVEL_THRESHOLDS[currentLevel];
+            if (threshold !== undefined && newXP >= threshold) {
+                leveledUp = true;
+            }
+        }
+
+        return { currentXP, newXP, leveledUp };
     }
 }
+
+// --- Handler Registry ---
+
+const _customHandlers = [];
+
+/**
+ * Global API exposed for third-party modules to register custom system handlers.
+ * Handlers must extend SystemHandler and implement isValid, getCreatureData,
+ * calculateXP, and updatePlayerXP. Custom handlers take priority over built-ins.
+ *
+ * @example
+ * // In your module's 'init' hook:
+ * AutoXP.registerHandler(new MySystemHandler());
+ */
+globalThis.AutoXP = {
+    registerHandler(handler) {
+        if (!(handler instanceof SystemHandler)) {
+            console.warn('Auto XP | registerHandler: handler must extend SystemHandler. Handler was not registered.');
+            return;
+        }
+        // Custom handlers are prepended so they take priority over built-in handlers
+        _customHandlers.unshift(handler);
+        console.log(`Auto XP | Registered custom system handler: ${handler.constructor.name}`);
+    }
+};
+
+// --- Settings ---
+
+Hooks.once('init', () => {
+    game.settings.register(MODULE_ID, 'enabled', {
+        name: 'Enable Auto XP',
+        hint: 'Automatically calculate and award XP to player characters at the end of combat encounters.',
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+    });
+
+    game.settings.register(MODULE_ID, 'xp-multiplier', {
+        name: 'XP Multiplier',
+        hint: 'Multiply all XP awards by this value. Use values below 1.0 for slower progression, or above 1.0 for faster. (Default: 1.0)',
+        scope: 'world',
+        config: true,
+        type: Number,
+        default: 1.0,
+    });
+
+    game.settings.register(MODULE_ID, 'notify-players', {
+        name: 'Notify Players',
+        hint: 'Send an in-game notification to each player when XP is awarded to their characters.',
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+    });
+
+    game.settings.register(MODULE_ID, 'dnd5e-encounter-multiplier', {
+        name: 'D&D 5e: Apply Encounter Multiplier',
+        hint: 'Apply the official D&D 5e encounter difficulty multiplier (DMG p.82) based on the number of monsters defeated.',
+        scope: 'world',
+        config: true,
+        type: Boolean,
+        default: true,
+    });
+});
 
 // --- Main Module Logic ---
 
 let systemHandler = null;
 
 Hooks.once('ready', () => {
-    if (game.system.id === 'pf2e') {
-        systemHandler = new PF2eHandler();
-    } else if (game.system.id === 'dnd5e') {
-        systemHandler = new DnD5eHandler();
-    }
+    // Custom handlers (registered via AutoXP.registerHandler) take priority over built-ins
+    const allHandlers = [..._customHandlers, new PF2eHandler(), new DnD5eHandler()];
+    systemHandler = allHandlers.find(h => h.isValid) ?? null;
 
     if (systemHandler) {
-        console.log(`Auto XP Calculator | Ready (${game.system.id})`);
+        console.log(`Auto XP Calculator | Ready (${game.system.id}) using ${systemHandler.constructor.name}`);
     } else {
-        console.warn('Auto XP Calculator | Unsupported system');
+        console.warn('Auto XP Calculator | Unsupported game system. XP will not be awarded automatically.');
     }
 
-    // Socket listener for player notifications
-    game.socket.on('module.auto-xp', (data) => {
+    // Socket listener for player-side notifications
+    game.socket.on(`module.${MODULE_ID}`, (data) => {
+        // Validate payload structure before use
+        if (!data || typeof data !== 'object') return;
+
         if (data.type === 'xp-award') {
-            if (game.user.isGM) return; // GM already got the notification
+            if (!Array.isArray(data.actorIds) || typeof data.amount !== 'number') return;
+            if (game.user.isGM) return; // GM already received a notification directly
 
             const myActors = data.actorIds
                 .map(id => game.actors.get(id))
@@ -124,12 +264,27 @@ Hooks.once('ready', () => {
                 ui.notifications.info(`Auto XP: ${names} received ${data.amount} XP.`);
             }
         }
+
+        if (data.type === 'level-up') {
+            if (!Array.isArray(data.actorIds)) return;
+            if (game.user.isGM) return; // GM is already notified inline
+
+            const myActors = data.actorIds
+                .map(id => game.actors.get(id))
+                .filter(actor => actor && actor.isOwner);
+
+            if (myActors.length > 0) {
+                const names = myActors.map(a => a.name).join(', ');
+                ui.notifications.info(`🎉 Auto XP: ${names} has enough XP to level up!`);
+            }
+        }
     });
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
     if (!game.user.isGM) return;
     if (!systemHandler) return;
+    if (!game.settings.get(MODULE_ID, 'enabled')) return;
     if (!combatEnded(update)) return;
     await processCombatXP(combat);
 });
@@ -137,7 +292,10 @@ Hooks.on('updateCombat', async (combat, update) => {
 Hooks.on('deleteCombat', async (combat) => {
     if (!game.user.isGM) return;
     if (!systemHandler) return;
-    await processCombatXP(combat, { skipFlag: true });
+    if (!game.settings.get(MODULE_ID, 'enabled')) return;
+    // The module-level Set in processCombatXP ensures that if updateCombat already
+    // handled this combat (active → false), deleteCombat will bail out immediately.
+    await processCombatXP(combat);
 });
 
 Hooks.on('deleteCombatant', async (combatant, context, userId) => {
@@ -147,7 +305,7 @@ Hooks.on('deleteCombatant', async (combatant, context, userId) => {
     const combat = combatant.combat;
     if (!combat) return;
 
-    // Check if it's a valid enemy (NPC/Hazard)
+    // Only bank valid enemy types
     const validTypes = ['npc', 'hazard'];
     if (!validTypes.includes(combatant.actor?.type)) return;
 
@@ -175,42 +333,48 @@ function combatEnded(update) {
     return becameInactive || (resetRound && resetTurn);
 }
 
-async function processCombatXP(combat, { skipFlag = false } = {}) {
-    if (combat.xpProcessing) return;
-    combat.xpProcessing = true;
+async function processCombatXP(combat) {
+    // Guard against concurrent invocations for the same combat (e.g. updateCombat + deleteCombat firing together)
+    if (_processingCombats.has(combat.id)) return;
+    _processingCombats.add(combat.id);
 
     try {
         if (combat.getFlag(MODULE_ID, 'xpAwarded')) {
-            console.log('Auto XP Calculator | XP already awarded for this combat');
+            console.log('Auto XP Calculator | XP already awarded for this combat, skipping.');
             return;
         }
 
-        const { xpPerCharacter, players, defeatedCreatures } = calculateEncounterXP(combat);
+        const { xpPerCharacter: rawXP, players, defeatedCreatures } = calculateEncounterXP(combat);
 
         if (!players.length) {
-            console.warn('Auto XP Calculator | No player characters found to award XP');
-            if (!skipFlag) await markCombatProcessed(combat);
+            console.warn('Auto XP Calculator | No player characters found to award XP.');
+            await markCombatProcessed(combat);
             return;
         }
+
+        // Apply the global XP multiplier setting
+        const multiplier = game.settings.get(MODULE_ID, 'xp-multiplier') ?? 1;
+        const xpPerCharacter = Math.floor(rawXP * multiplier);
 
         if (xpPerCharacter === 0) {
-            console.log('Auto XP Calculator | No XP to award (calculated 0)');
-            if (defeatedCreatures.length > 0) {
-                // In PF2e with system metrics, 0 might be valid (trivial encounter), so we log but don't warn loudly
-            }
-            if (!skipFlag) await markCombatProcessed(combat);
+            console.log('Auto XP Calculator | No XP to award (calculated 0).');
+            await markCombatProcessed(combat);
             return;
         }
 
-        console.log('Auto XP Calculator | Awarding XP:', {
-            xpPerCharacter,
-            playersLength: players.length
-        });
+        console.log('Auto XP Calculator | Awarding XP:', { xpPerCharacter, players: players.length });
+
+        const leveledUpActorIds = [];
 
         for (const player of players) {
             try {
-                const { currentXP, newXP } = await systemHandler.updatePlayerXP(player.actor, xpPerCharacter);
+                const { currentXP, newXP, leveledUp } = await systemHandler.updatePlayerXP(player.actor, xpPerCharacter);
                 console.log(`Auto XP Calculator | Updated XP for ${player.name}`, { currentXP, xpPerCharacter, newXP });
+
+                if (leveledUp) {
+                    leveledUpActorIds.push(player.actor.id);
+                    ui.notifications.info(`🎉 Auto XP: ${player.name} has enough XP to level up!`);
+                }
             } catch (error) {
                 console.error(`Auto XP Calculator | Failed to update XP for ${player.name}`, error);
             }
@@ -218,21 +382,28 @@ async function processCombatXP(combat, { skipFlag = false } = {}) {
 
         ui.notifications.info(`Auto XP: Awarded ${xpPerCharacter} XP to ${players.length} character(s).`);
 
-        // Notify players via socket
-        const actorIds = players.map(p => p.actor.id);
-        game.socket.emit('module.auto-xp', {
-            type: 'xp-award',
-            amount: xpPerCharacter,
-            actorIds: actorIds
-        });
+        // Emit socket events for player notifications (if enabled)
+        if (game.settings.get(MODULE_ID, 'notify-players')) {
+            const actorIds = players.map(p => p.actor.id);
+            game.socket.emit(`module.${MODULE_ID}`, {
+                type: 'xp-award',
+                amount: xpPerCharacter,
+                actorIds,
+            });
 
-        if (!skipFlag) {
-            await markCombatProcessed(combat);
+            if (leveledUpActorIds.length > 0) {
+                game.socket.emit(`module.${MODULE_ID}`, {
+                    type: 'level-up',
+                    actorIds: leveledUpActorIds,
+                });
+            }
         }
+
+        await markCombatProcessed(combat);
     } catch (error) {
         console.error('Auto XP Calculator | Failed to process combat XP', error);
     } finally {
-        combat.xpProcessing = false;
+        _processingCombats.delete(combat.id);
     }
 }
 
@@ -240,7 +411,7 @@ function calculateEncounterXP(combat) {
     const combatants = Array.from(combat.combatants ?? []);
     const players = getUniquePlayerActors(combatants);
 
-    // PF2e & 5e common logic: filter for defeated/dead NPCs/Hazards
+    // Filter for defeated/dead NPCs and hazards still on the tracker
     const defeatedCreatures = combatants
         .filter(c => {
             const validTypes = ['npc', 'hazard'];
@@ -252,14 +423,14 @@ function calculateEncounterXP(combat) {
         })
         .map(c => systemHandler.getCreatureData(c));
 
-    // Add banked creatures (deleted during combat)
+    // Merge in banked creatures (those deleted from the tracker before combat ended)
     const bankedCreatures = combat.getFlag(MODULE_ID, 'banked-xp') || [];
     const allDefeatedCreatures = [...defeatedCreatures, ...bankedCreatures];
 
     return {
         ...systemHandler.calculateXP(combat, players, allDefeatedCreatures),
         players,
-        defeatedCreatures: allDefeatedCreatures
+        defeatedCreatures: allDefeatedCreatures,
     };
 }
 
@@ -268,7 +439,7 @@ function getUniquePlayerActors(combatants) {
     const players = [];
     for (const combatant of combatants) {
         const actor = combatant.actor;
-        // Fix: Check for player ownership to avoid awarding XP to NPC allies
+        // Only include characters with a player owner; excludes NPC allies
         if (!actor || actor.type !== 'character' || !actor.hasPlayerOwner) continue;
         if (seenActors.has(actor.id)) continue;
         seenActors.add(actor.id);
@@ -276,7 +447,7 @@ function getUniquePlayerActors(combatants) {
         players.push({
             actor,
             name: actor.name ?? combatant.name,
-            level: Number(actor.system.details.level?.value ?? 1)
+            level: Number(actor.system.details.level?.value ?? 1),
         });
     }
     return players;
@@ -286,6 +457,7 @@ async function markCombatProcessed(combat) {
     try {
         await combat.setFlag(MODULE_ID, 'xpAwarded', true);
     } catch (error) {
-        console.warn('Auto XP Calculator | Unable to store combat flag', error);
+        // This can legitimately fail when called on a combat being deleted; log only
+        console.warn('Auto XP Calculator | Unable to store xpAwarded flag (combat may have been deleted)', error);
     }
 }
