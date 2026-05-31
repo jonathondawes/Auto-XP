@@ -3,6 +3,7 @@
     "title": "Auto XP Calculator",
     "description": "Automatically calculates and distributes XP after combat encounters for Pathfinder 2E and DnD 5e",
     "version": "1.3.0",
+    "socket": true,
     "compatibility": {
         "minimum": "10",
         "verified": "11",
