@@ -246,39 +246,6 @@ Hooks.once('ready', () => {
         console.warn('Auto XP Calculator | Unsupported game system. XP will not be awarded automatically.');
     }
 
-    // Socket listener for player-side notifications
-    game.socket.on(`module.${MODULE_ID}`, (data) => {
-        // Validate payload structure before use
-        if (!data || typeof data !== 'object') return;
-
-        if (data.type === 'xp-award') {
-            if (!Array.isArray(data.actorIds) || typeof data.amount !== 'number') return;
-            if (game.user.isGM) return; // GM already received a notification directly
-
-            const myActors = data.actorIds
-                .map(id => game.actors.get(id))
-                .filter(actor => actor && actor.isOwner);
-
-            if (myActors.length > 0) {
-                const names = myActors.map(a => a.name).join(', ');
-                ui.notifications.info(`Auto XP: ${names} received ${data.amount} XP.`);
-            }
-        }
-
-        if (data.type === 'level-up') {
-            if (!Array.isArray(data.actorIds)) return;
-            if (game.user.isGM) return; // GM is already notified inline
-
-            const myActors = data.actorIds
-                .map(id => game.actors.get(id))
-                .filter(actor => actor && actor.isOwner);
-
-            if (myActors.length > 0) {
-                const names = myActors.map(a => a.name).join(', ');
-                ui.notifications.info(`🎉 Auto XP: ${names} has enough XP to level up!`);
-            }
-        }
-    });
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
@@ -382,21 +349,9 @@ async function processCombatXP(combat) {
 
         ui.notifications.info(`Auto XP: Awarded ${xpPerCharacter} XP to ${players.length} character(s).`);
 
-        // Emit socket events for player notifications (if enabled)
+        // Whisper notifications to each player (if enabled)
         if (game.settings.get(MODULE_ID, 'notify-players')) {
-            const actorIds = players.map(p => p.actor.id);
-            game.socket.emit(`module.${MODULE_ID}`, {
-                type: 'xp-award',
-                amount: xpPerCharacter,
-                actorIds,
-            });
-
-            if (leveledUpActorIds.length > 0) {
-                game.socket.emit(`module.${MODULE_ID}`, {
-                    type: 'level-up',
-                    actorIds: leveledUpActorIds,
-                });
-            }
+            await notifyPlayersViaWhisper(players, xpPerCharacter, leveledUpActorIds);
         }
 
         await markCombatProcessed(combat);
@@ -459,5 +414,52 @@ async function markCombatProcessed(combat) {
     } catch (error) {
         // This can legitimately fail when called on a combat being deleted; log only
         console.warn('Auto XP Calculator | Unable to store xpAwarded flag (combat may have been deleted)', error);
+    }
+}
+
+/**
+ * Sends a whispered ChatMessage to each player informing them of their XP award.
+ * Chat whispers are server-routed and reliably delivered without needing socket configuration.
+ *
+ * @param {Array} players - List of { actor, name } player objects
+ * @param {number} xpPerCharacter - Amount of XP awarded to each character
+ * @param {string[]} leveledUpActorIds - Actor IDs of characters who have enough XP to level up
+ */
+async function notifyPlayersViaWhisper(players, xpPerCharacter, leveledUpActorIds) {
+    // Build a map from actorId -> [userId] for all non-GM users who own the actor
+    const actorUserMap = new Map();
+    for (const user of game.users) {
+        if (user.isGM) continue;
+        for (const player of players) {
+            if (player.actor.testUserPermission(user, 'OWNER')) {
+                if (!actorUserMap.has(player.actor.id)) actorUserMap.set(player.actor.id, []);
+                actorUserMap.get(player.actor.id).push(user.id);
+            }
+        }
+    }
+
+    // Group actors by their whisper target set so we can batch messages where possible
+    const userActorMap = new Map(); // userId -> [actor]
+    for (const player of players) {
+        const userIds = actorUserMap.get(player.actor.id) ?? [];
+        for (const userId of userIds) {
+            if (!userActorMap.has(userId)) userActorMap.set(userId, []);
+            userActorMap.get(userId).push(player);
+        }
+    }
+
+    for (const [userId, userPlayers] of userActorMap) {
+        const names = userPlayers.map(p => p.name).join(', ');
+        const leveled = userPlayers.filter(p => leveledUpActorIds.includes(p.actor.id));
+        let content = `<strong>Auto XP:</strong> ${names} received <strong>${xpPerCharacter} XP</strong>.`;
+        if (leveled.length > 0) {
+            const leveledNames = leveled.map(p => p.name).join(', ');
+            content += `<br>🎉 <strong>${leveledNames}</strong> has enough XP to level up!`;
+        }
+        await ChatMessage.create({
+            content,
+            whisper: [userId],
+            speaker: { alias: 'Auto XP' },
+        });
     }
 }
