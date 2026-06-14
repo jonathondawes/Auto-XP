@@ -6,8 +6,8 @@
     "socket": true,
     "compatibility": {
         "minimum": "10",
-        "verified": "11",
-        "maximum": "13"
+        "verified": "14",
+        "maximum": "14"
     },
     "authors": [
         {
@@ -17,7 +17,9 @@
     "esmodules": [
         "scripts/auto-xp.js"
     ],
-    "styles": ["styles/auto-xp.css"],
+    "styles": [
+        "styles/auto-xp.css"
+    ],
     "languages": [],
     "system": [
         "pf2e",
