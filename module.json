@@ -11,13 +11,13 @@
     },
     "authors": [
         {
-            "name": "Jonathan Dawes"
+            "name": "Jonathon Dawes"
         }
     ],
     "esmodules": [
         "scripts/auto-xp.js"
     ],
-    "styles": [],
+    "styles": ["styles/auto-xp.css"],
     "languages": [],
     "system": [
         "pf2e",

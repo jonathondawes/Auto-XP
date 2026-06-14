@@ -214,7 +214,7 @@ Hooks.once('init', () => {
 
     game.settings.register(MODULE_ID, 'notify-players', {
         name: 'Notify Players',
-        hint: 'Send an in-game notification to each player when XP is awarded to their characters.',
+        hint: 'Post the XP award to the public chat log so all players can see it. When disabled, the award card is whispered to the GM only.',
         scope: 'world',
         config: true,
         type: Boolean,
@@ -246,6 +246,25 @@ Hooks.once('ready', () => {
         console.warn('Auto XP Calculator | Unsupported game system. XP will not be awarded automatically.');
     }
 
+    // Socket listener for player-side level-up popup notifications
+    game.socket.on(`module.${MODULE_ID}`, (data) => {
+        // Validate payload structure before use
+        if (!data || typeof data !== 'object') return;
+
+        if (data.type === 'level-up') {
+            if (!Array.isArray(data.actorIds)) return;
+            if (game.user.isGM) return; // GM sees the level-up badge on the chat card
+
+            const myActors = data.actorIds
+                .map(id => game.actors.get(id))
+                .filter(actor => actor && actor.isOwner);
+
+            if (myActors.length > 0) {
+                const names = myActors.map(a => a.name).join(', ');
+                ui.notifications.info(`🎉 Auto XP: ${names} has enough XP to level up!`);
+            }
+        }
+    });
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
@@ -297,7 +316,10 @@ function combatEnded(update) {
     const becameInactive = Object.prototype.hasOwnProperty.call(update, 'active') && update.active === false;
     const resetRound = Object.prototype.hasOwnProperty.call(update, 'round') && update.round === 0;
     const resetTurn = Object.prototype.hasOwnProperty.call(update, 'turn') && update.turn === 0;
-    return becameInactive || (resetRound && resetTurn);
+    // Exclude the case where combat is just becoming active (i.e. starting), which also
+    // resets round and turn to 0 and would otherwise trigger a false-positive.
+    const becomingActive = Object.prototype.hasOwnProperty.call(update, 'active') && update.active === true;
+    return becameInactive || (!becomingActive && resetRound && resetTurn);
 }
 
 async function processCombatXP(combat) {
@@ -332,26 +354,38 @@ async function processCombatXP(combat) {
         console.log('Auto XP Calculator | Awarding XP:', { xpPerCharacter, players: players.length });
 
         const leveledUpActorIds = [];
+        const successPlayers = [];
+        let successCount = 0;
 
         for (const player of players) {
             try {
                 const { currentXP, newXP, leveledUp } = await systemHandler.updatePlayerXP(player.actor, xpPerCharacter);
                 console.log(`Auto XP Calculator | Updated XP for ${player.name}`, { currentXP, xpPerCharacter, newXP });
+                successCount++;
+                successPlayers.push(player);
 
                 if (leveledUp) {
                     leveledUpActorIds.push(player.actor.id);
-                    ui.notifications.info(`🎉 Auto XP: ${player.name} has enough XP to level up!`);
                 }
             } catch (error) {
                 console.error(`Auto XP Calculator | Failed to update XP for ${player.name}`, error);
             }
         }
 
-        ui.notifications.info(`Auto XP: Awarded ${xpPerCharacter} XP to ${players.length} character(s).`);
+        if (successCount > 0) {
+            const notifyPlayers = game.settings.get(MODULE_ID, 'notify-players');
+            await createXPAwardMessage(successPlayers, xpPerCharacter, leveledUpActorIds, notifyPlayers);
+        }
+        if (successCount < players.length) {
+            ui.notifications.warn(`Auto XP: Failed to award XP to ${players.length - successCount} character(s). Check the console for details.`);
+        }
 
-        // Whisper notifications to each player (if enabled)
-        if (game.settings.get(MODULE_ID, 'notify-players')) {
-            await notifyPlayersViaWhisper(players, xpPerCharacter, leveledUpActorIds);
+        // Emit a level-up socket popup to players (in addition to the chat card badge)
+        if (game.settings.get(MODULE_ID, 'notify-players') && leveledUpActorIds.length > 0) {
+            game.socket.emit(`module.${MODULE_ID}`, {
+                type: 'level-up',
+                actorIds: leveledUpActorIds,
+            });
         }
 
         await markCombatProcessed(combat);
@@ -378,9 +412,16 @@ function calculateEncounterXP(combat) {
         })
         .map(c => systemHandler.getCreatureData(c));
 
-    // Merge in banked creatures (those deleted from the tracker before combat ended)
+    // Merge in banked creatures (those deleted from the tracker before combat ended).
+    // Deduplicate by ID to prevent double-counting creatures that were both banked and
+    // are still present on the tracker (e.g. when Foundry bulk-deletes combatants on
+    // combat end, firing deleteCombatant before processCombatXP has run).
     const bankedCreatures = combat.getFlag(MODULE_ID, 'banked-xp') || [];
-    const allDefeatedCreatures = [...defeatedCreatures, ...bankedCreatures];
+    const seenIds = new Set(defeatedCreatures.map(c => c.id));
+    const allDefeatedCreatures = [
+        ...defeatedCreatures,
+        ...bankedCreatures.filter(c => !seenIds.has(c.id)),
+    ];
 
     return {
         ...systemHandler.calculateXP(combat, players, allDefeatedCreatures),
@@ -402,10 +443,58 @@ function getUniquePlayerActors(combatants) {
         players.push({
             actor,
             name: actor.name ?? combatant.name,
-            level: Number(actor.system.details.level?.value ?? 1),
+            // PF2e stores level as { value: number }; D&D 5e stores it as a plain number.
+            level: Number(actor.system.details.level?.value ?? actor.system.details.level ?? 1),
         });
     }
     return players;
+}
+
+/**
+ * Builds and posts a rich XP award chat card showing each character's token image.
+ * @param {Array}   awardedPlayers    - Player objects whose XP was successfully updated
+ * @param {number}  xpPerCharacter    - XP awarded to each character
+ * @param {Array}   leveledUpActorIds - IDs of actors that crossed a level-up threshold
+ * @param {boolean} notifyPlayers     - If true, post publicly; if false, whisper to GM only
+ */
+async function createXPAwardMessage(awardedPlayers, xpPerCharacter, leveledUpActorIds, notifyPlayers) {
+    const leveledUpSet = new Set(leveledUpActorIds);
+
+    const rows = awardedPlayers.map(player => {
+        // Prefer the token artwork used in combat; fall back to actor portrait
+        const tokenSrc = player.actor.prototypeToken?.texture?.src ?? player.actor.img ?? 'icons/svg/mystery-man.svg';
+        const isLeveledUp = leveledUpSet.has(player.actor.id);
+        const levelBadge = isLeveledUp ? `<span class="auto-xp-levelup-badge">🎉 Level Up!</span>` : '';
+        const rowClass = `auto-xp-char-row${isLeveledUp ? ' auto-xp-leveled-up' : ''}`;
+        return `
+            <div class="${rowClass}">
+                <img class="auto-xp-token" src="${tokenSrc}" title="${player.name}" />
+                <span class="auto-xp-name">${player.name}</span>
+                <span class="auto-xp-amount">+${xpPerCharacter} XP</span>
+                ${levelBadge}
+            </div>`;
+    }).join('');
+
+    const content = `
+        <div class="auto-xp-award-card">
+            <div class="auto-xp-header">
+                <span class="auto-xp-icon">⚔️</span>
+                <span class="auto-xp-title">XP Awarded</span>
+                <span class="auto-xp-total">${xpPerCharacter} XP each</span>
+            </div>
+            <div class="auto-xp-chars">
+                ${rows}
+            </div>
+        </div>`;
+
+    // When notify-players is disabled, whisper the card to the GM only
+    const gmIds = game.users.filter(u => u.isGM).map(u => u.id);
+
+    await ChatMessage.create({
+        content,
+        speaker: { alias: 'Auto XP' },
+        whisper: notifyPlayers ? [] : gmIds,
+    });
 }
 
 async function markCombatProcessed(combat) {
@@ -415,51 +504,4 @@ async function markCombatProcessed(combat) {
         // This can legitimately fail when called on a combat being deleted; log only
         console.warn('Auto XP Calculator | Unable to store xpAwarded flag (combat may have been deleted)', error);
     }
-}
-
-/**
- * Sends a whispered ChatMessage to each player informing them of their XP award.
- * Chat whispers are server-routed and reliably delivered without needing socket configuration.
- *
- * @param {Array} players - List of { actor, name } player objects
- * @param {number} xpPerCharacter - Amount of XP awarded to each character
- * @param {string[]} leveledUpActorIds - Actor IDs of characters who have enough XP to level up
- */
-async function notifyPlayersViaWhisper(players, xpPerCharacter, leveledUpActorIds) {
-    // Build a map from actorId -> [userId] for all non-GM users who own the actor
-    const actorUserMap = new Map();
-    for (const user of game.users) {
-        if (user.isGM) continue;
-        for (const player of players) {
-            if (player.actor.testUserPermission(user, 'OWNER')) {
-                if (!actorUserMap.has(player.actor.id)) actorUserMap.set(player.actor.id, []);
-                actorUserMap.get(player.actor.id).push(user.id);
-            }
-        }
-    }
-
-    // Group actors by their whisper target set so we can batch messages where possible
-    const userActorMap = new Map(); // userId -> [actor]
-    for (const player of players) {
-        const userIds = actorUserMap.get(player.actor.id) ?? [];
-        for (const userId of userIds) {
-            if (!userActorMap.has(userId)) userActorMap.set(userId, []);
-            userActorMap.get(userId).push(player);
-        }
-    }
-
-    for (const [userId, userPlayers] of userActorMap) {
-        const names = userPlayers.map(p => p.name).join(', ');
-        const leveled = userPlayers.filter(p => leveledUpActorIds.includes(p.actor.id));
-        let content = `<strong>Auto XP:</strong> ${names} received <strong>${xpPerCharacter} XP</strong>.`;
-        if (leveled.length > 0) {
-            const leveledNames = leveled.map(p => p.name).join(', ');
-            content += `<br>🎉 <strong>${leveledNames}</strong> has enough XP to level up!`;
-        }
-        await ChatMessage.create({
-            content,
-            whisper: [userId],
-            speaker: { alias: 'Auto XP' },
-        });
-    }
-}
+}
