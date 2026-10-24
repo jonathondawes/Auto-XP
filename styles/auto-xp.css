@@ -121,3 +121,57 @@
     0%, 100% { opacity: 1; text-shadow: 0 0 6px rgba(246, 224, 94, 0.6); }
     50%       { opacity: 0.7; text-shadow: none; }
 }
+
+.auto-xp-gm-controls[hidden] {
+    display: none !important;
+}
+
+.auto-xp-gm-controls {
+    padding: 10px;
+    border-top: 1px solid #2d3350;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.auto-xp-gm-controls label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 100%;
+}
+
+.auto-xp-gm-controls input {
+    width: 100px;
+    background: #111420;
+    color: #e2e8f0;
+    border: 1px solid #7c6af7;
+}
+
+.auto-xp-gm-controls button {
+    flex: 1 1 120px;
+    width: auto;
+    background: #252844;
+    color: #e2e8f0;
+    border: 1px solid #7c6af7;
+}
+
+.auto-xp-gm-controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.auto-xp-gm-controls small {
+    flex: 1 1 100%;
+}
+
+.auto-xp-error {
+    flex: 1 1 100%;
+    color: #feb2b2;
+    font-size: 0.8em;
+}
+
+.auto-xp-char-row {
+    flex-wrap: wrap;
+}

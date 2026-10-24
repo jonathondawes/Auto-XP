@@ -5,6 +5,7 @@ const MODULE_ID = 'auto-xp';
 // Plain properties are lost if the combat object is re-fetched from the server;
 // a module-level Set persists for the lifetime of the session.
 const _processingCombats = new Set();
+let _awardQueue = Promise.resolve();
 
 // --- D&D 5e XP Thresholds ---
 // Index = current character level. Value = total XP required to reach the next level.
@@ -68,7 +69,7 @@ class SystemHandler {
      * @param {number} amount
      * @returns {Promise<{currentXP: number, newXP: number, leveledUp: boolean}>}
      */
-    async updatePlayerXP(actor, amount) {
+    async updatePlayerXP(actor, amount, receipt = null) {
         throw new Error('Not implemented');
     }
 }
@@ -102,10 +103,13 @@ class PF2eHandler extends SystemHandler {
         return { xpPerCharacter: 0 };
     }
 
-    async updatePlayerXP(actor, amount) {
+    async updatePlayerXP(actor, amount, receipt = null) {
         const currentXP = actor.system.details.xp?.value || 0;
         const newXP = currentXP + amount;
-        await actor.update({ 'system.details.xp.value': newXP });
+        if (!Number.isSafeInteger(newXP) || newXP < 0) throw new Error('XP total must be a non-negative safe integer.');
+        const update = { 'system.details.xp.value': newXP };
+        if (receipt) update[`flags.${MODULE_ID}.transactions.${receipt.id}`] = receipt.value;
+        await actor.update(update);
         // PF2e handles level advancement automatically; no detection needed here.
         return { currentXP, newXP, leveledUp: false };
     }
@@ -147,17 +151,20 @@ class DnD5eHandler extends SystemHandler {
         return { xpPerCharacter };
     }
 
-    async updatePlayerXP(actor, amount) {
+    async updatePlayerXP(actor, amount, receipt = null) {
         const currentXP = actor.system.details.xp?.value || 0;
         const newXP = currentXP + amount;
-        await actor.update({ 'system.details.xp.value': newXP });
+        if (!Number.isSafeInteger(newXP) || newXP < 0) throw new Error('XP total must be a non-negative safe integer.');
+        const update = { 'system.details.xp.value': newXP };
+        if (receipt) update[`flags.${MODULE_ID}.transactions.${receipt.id}`] = receipt.value;
+        await actor.update(update);
 
         // Level-up detection: check if newXP crosses the threshold for the next level
         let leveledUp = false;
         const currentLevel = Number(actor.system.details.level ?? 1);
         if (currentLevel < 20) {
             const threshold = DND5E_LEVEL_THRESHOLDS[currentLevel];
-            if (threshold !== undefined && newXP >= threshold) {
+            if (amount > 0 && threshold !== undefined && currentXP < threshold && newXP >= threshold) {
                 leveledUp = true;
             }
         }
@@ -180,6 +187,7 @@ const _customHandlers = [];
  * AutoXP.registerHandler(new MySystemHandler());
  */
 globalThis.AutoXP = {
+    SystemHandler,
     registerHandler(handler) {
         if (!(handler instanceof SystemHandler)) {
             console.warn('Auto XP | registerHandler: handler must extend SystemHandler. Handler was not registered.');
@@ -201,6 +209,16 @@ Hooks.once('init', () => {
         config: true,
         type: Boolean,
         default: true,
+    });
+
+    game.settings.register(MODULE_ID, 'award-mode', {
+        name: 'XP Award Mode',
+        hint: 'Automatic awards XP immediately. Review lets the active GM edit or discard the award first.',
+        scope: 'world',
+        config: true,
+        type: String,
+        choices: { automatic: 'Automatic', review: 'GM Review' },
+        default: 'automatic',
     });
 
     game.settings.register(MODULE_ID, 'xp-multiplier', {
@@ -268,7 +286,7 @@ Hooks.once('ready', () => {
 });
 
 Hooks.on('updateCombat', async (combat, update) => {
-    if (!game.user.isGM) return;
+    if (!isAwardAuthority()) return;
     if (!systemHandler) return;
     if (!game.settings.get(MODULE_ID, 'enabled')) return;
     if (!combatEnded(update)) return;
@@ -276,7 +294,7 @@ Hooks.on('updateCombat', async (combat, update) => {
 });
 
 Hooks.on('deleteCombat', async (combat) => {
-    if (!game.user.isGM) return;
+    if (!isAwardAuthority()) return;
     if (!systemHandler) return;
     if (!game.settings.get(MODULE_ID, 'enabled')) return;
     // The module-level Set in processCombatXP ensures that if updateCombat already
@@ -285,7 +303,7 @@ Hooks.on('deleteCombat', async (combat) => {
 });
 
 Hooks.on('deleteCombatant', async (combatant, context, userId) => {
-    if (!game.user.isGM) return;
+    if (!isAwardAuthority()) return;
     if (!systemHandler) return;
 
     const combat = combatant.combat;
@@ -322,75 +340,69 @@ function combatEnded(update) {
     return becameInactive || (!becomingActive && resetRound && resetTurn);
 }
 
+// One active GM handles combat hooks and card actions. This avoids independent
+// browser-local locks awarding the same encounter on multiple GM clients.
+function isAwardAuthority() {
+    const gm = game.users.activeGM ?? game.users.filter(u => u.active && u.isGM)
+        .sort((a, b) => a.id.localeCompare(b.id))[0];
+    return game.user.isGM && gm?.id === game.user.id;
+}
+
+function queueAwardAction(action) {
+    const result = _awardQueue.then(action);
+    _awardQueue = result.catch(() => {});
+    return result;
+}
+
+function findCombatAward(combatId) {
+    return game.messages.find(message => message.getFlag(MODULE_ID, 'award')?.combatId === combatId);
+}
+
 async function processCombatXP(combat) {
-    // Guard against concurrent invocations for the same combat (e.g. updateCombat + deleteCombat firing together)
-    if (_processingCombats.has(combat.id)) return;
+    if (!isAwardAuthority() || _processingCombats.has(combat.id)) return;
     _processingCombats.add(combat.id);
-
     try {
-        if (combat.getFlag(MODULE_ID, 'xpAwarded')) {
-            console.log('Auto XP Calculator | XP already awarded for this combat, skipping.');
-            return;
-        }
-
-        const { xpPerCharacter: rawXP, players, defeatedCreatures } = calculateEncounterXP(combat);
-
-        if (!players.length) {
-            console.warn('Auto XP Calculator | No player characters found to award XP.');
-            await markCombatProcessed(combat);
-            return;
-        }
-
-        // Apply the global XP multiplier setting
-        const multiplier = game.settings.get(MODULE_ID, 'xp-multiplier') ?? 1;
-        const xpPerCharacter = Math.floor(rawXP * multiplier);
-
-        if (xpPerCharacter === 0) {
-            console.log('Auto XP Calculator | No XP to award (calculated 0).');
-            await markCombatProcessed(combat);
-            return;
-        }
-
-        console.log('Auto XP Calculator | Awarding XP:', { xpPerCharacter, players: players.length });
-
-        const leveledUpActorIds = [];
-        const successPlayers = [];
-        let successCount = 0;
-
-        for (const player of players) {
-            try {
-                const { currentXP, newXP, leveledUp } = await systemHandler.updatePlayerXP(player.actor, xpPerCharacter);
-                console.log(`Auto XP Calculator | Updated XP for ${player.name}`, { currentXP, xpPerCharacter, newXP });
-                successCount++;
-                successPlayers.push(player);
-
-                if (leveledUp) {
-                    leveledUpActorIds.push(player.actor.id);
-                }
-            } catch (error) {
-                console.error(`Auto XP Calculator | Failed to update XP for ${player.name}`, error);
+        await queueAwardAction(async () => {
+            // The message is a durable encounter record, including after deletion.
+            if (combat.getFlag(MODULE_ID, 'xpAwarded') || findCombatAward(combat.id)) return;
+            const { xpPerCharacter: rawXP, players } = calculateEncounterXP(combat);
+            const multiplier = Number(game.settings.get(MODULE_ID, 'xp-multiplier') ?? 1);
+            const amount = Math.floor(rawXP * multiplier);
+            if (!Number.isFinite(rawXP) || !Number.isFinite(multiplier) || multiplier < 0 ||
+                !Number.isSafeInteger(amount) || amount < 0) {
+                throw new Error('Calculated XP and multiplier must be valid non-negative numbers.');
             }
-        }
-
-        if (successCount > 0) {
-            const notifyPlayers = game.settings.get(MODULE_ID, 'notify-players');
-            await createXPAwardMessage(successPlayers, xpPerCharacter, leveledUpActorIds, notifyPlayers);
-        }
-        if (successCount < players.length) {
-            ui.notifications.warn(`Auto XP: Failed to award XP to ${players.length - successCount} character(s). Check the console for details.`);
-        }
-
-        // Emit a level-up socket popup to players (in addition to the chat card badge)
-        if (game.settings.get(MODULE_ID, 'notify-players') && leveledUpActorIds.length > 0) {
-            game.socket.emit(`module.${MODULE_ID}`, {
-                type: 'level-up',
-                actorIds: leveledUpActorIds,
+            if (!players.length || amount === 0) return;
+            const award = {
+                combatId: combat.id,
+                systemId: game.system.id,
+                status: 'pending',
+                amount,
+                notifyPlayers: game.settings.get(MODULE_ID, 'notify-players'),
+                entries: players.map(player => ({
+                    uuid: player.actor.uuid,
+                    name: player.name,
+                    img: player.actor.prototypeToken?.texture?.src ?? player.actor.img ?? 'icons/svg/mystery-man.svg',
+                    amount: 0,
+                    state: 'pending',
+                    leveledUp: false,
+                })),
+            };
+            // Save the ledger BEFORE changing any actor. Pending cards are GM-only.
+            const message = await ChatMessage.create({
+                content: renderAwardCard(award),
+                speaker: { alias: 'Auto XP' },
+                whisper: game.users.filter(u => u.isGM).map(u => u.id),
+                flags: { [MODULE_ID]: { award } },
             });
-        }
-
-        await markCombatProcessed(combat);
+            await markCombatProcessed(combat);
+            if (game.settings.get(MODULE_ID, 'award-mode') !== 'review') {
+                await performAwardAction(message, 'award', amount);
+            }
+        });
     } catch (error) {
-        console.error('Auto XP Calculator | Failed to process combat XP', error);
+        console.error('Auto XP | Could not process encounter', error);
+        ui.notifications.error(`Auto XP: ${error.message}`);
     } finally {
         _processingCombats.delete(combat.id);
     }
@@ -450,58 +462,160 @@ function getUniquePlayerActors(combatants) {
     return players;
 }
 
-/**
- * Builds and posts a rich XP award chat card showing each character's token image.
- * @param {Array}   awardedPlayers    - Player objects whose XP was successfully updated
- * @param {number}  xpPerCharacter    - XP awarded to each character
- * @param {Array}   leveledUpActorIds - IDs of actors that crossed a level-up threshold
- * @param {boolean} notifyPlayers     - If true, post publicly; if false, whisper to GM only
- */
-async function createXPAwardMessage(awardedPlayers, xpPerCharacter, leveledUpActorIds, notifyPlayers) {
-    const leveledUpSet = new Set(leveledUpActorIds);
+// All interpolated character data is escaped before entering chat HTML.
+function escapeHTML(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+}
 
-    const rows = awardedPlayers.map(player => {
-        // Prefer the token artwork used in combat; fall back to actor portrait
-        const tokenSrc = player.actor.prototypeToken?.texture?.src ?? player.actor.img ?? 'icons/svg/mystery-man.svg';
-        const isLeveledUp = leveledUpSet.has(player.actor.id);
-        const levelBadge = isLeveledUp ? `<span class="auto-xp-levelup-badge">🎉 Level Up!</span>` : '';
-        const rowClass = `auto-xp-char-row${isLeveledUp ? ' auto-xp-leveled-up' : ''}`;
-        return `
-            <div class="${rowClass}">
-                <img class="auto-xp-token" src="${tokenSrc}" title="${player.name}" />
-                <span class="auto-xp-name">${player.name}</span>
-                <span class="auto-xp-amount">+${xpPerCharacter} XP</span>
-                ${levelBadge}
-            </div>`;
-    }).join('');
-
-    const content = `
-        <div class="auto-xp-award-card">
-            <div class="auto-xp-header">
-                <span class="auto-xp-icon">⚔️</span>
-                <span class="auto-xp-title">XP Awarded</span>
-                <span class="auto-xp-total">${xpPerCharacter} XP each</span>
-            </div>
-            <div class="auto-xp-chars">
-                ${rows}
-            </div>
+function renderAwardCard(award) {
+    const titles = { pending: 'Review XP', applying: 'XP award needs attention', awarded: 'XP Awarded',
+        discarded: 'XP Discarded', undoing: 'Undo needs attention', undone: 'XP Undone' };
+    const rows = award.entries.map(entry => `
+        <div class="auto-xp-char-row">
+            <img class="auto-xp-token" src="${escapeHTML(entry.img)}" alt="" />
+            <span class="auto-xp-name">${escapeHTML(entry.name)}</span>
+            <span class="auto-xp-amount">${entry.state === 'applied' ? '+' + entry.amount + ' XP' : escapeHTML(entry.state)}</span>
+            ${entry.leveledUp && entry.state === 'applied' ? '<span class="auto-xp-levelup-badge">🎉 Level Up!</span>' : ''}
+            ${entry.error ? `<span class="auto-xp-error">${escapeHTML(entry.error)}</span>` : ''}
+        </div>`).join('');
+    let controls = '';
+    if (award.status === 'pending') {
+        controls = `<label>XP per character <input class="auto-xp-review-amount" type="number" min="0" step="1" value="${award.amount}" /></label>
+            <button type="button" data-auto-xp-action="award">Award XP</button>
+            <button type="button" data-auto-xp-action="discard">Discard</button>`;
+    } else if (award.status === 'applying') {
+        controls = '<button type="button" data-auto-xp-action="award">Retry remaining awards</button>';
+    }
+    if (['awarded', 'applying', 'undoing'].includes(award.status)) {
+        controls += `<button type="button" data-auto-xp-action="undo">${award.status === 'undoing' ? 'Retry undo' : 'Undo award'}</button>`;
+    }
+    return `<div class="auto-xp-award-card">
+        <div class="auto-xp-header"><span class="auto-xp-title">${titles[award.status]}</span>
+        <span class="auto-xp-total">${award.amount} XP each</span></div>
+        <div class="auto-xp-chars">${rows}</div>
+        <div class="auto-xp-gm-controls" hidden>${controls}<small>Controls are available to the active GM.</small></div>
         </div>`;
+}
 
-    // When notify-players is disabled, whisper the card to the GM only
-    const gmIds = game.users.filter(u => u.isGM).map(u => u.id);
-
-    await ChatMessage.create({
-        content,
-        speaker: { alias: 'Auto XP' },
-        whisper: notifyPlayers ? [] : gmIds,
+async function saveAward(message, award) {
+    const showPlayers = award.notifyPlayers && award.status !== 'pending' && award.status !== 'discarded';
+    await message.update({
+        [`flags.${MODULE_ID}.award`]: award,
+        content: renderAwardCard(award),
+        whisper: showPlayers ? [] : game.users.filter(u => u.isGM).map(u => u.id),
     });
 }
+
+async function performAwardAction(message, action, requestedAmount) {
+    // Check here as well as in the render hook: hidden buttons are not authorization.
+    if (!isAwardAuthority() || !systemHandler) return;
+    const stored = message.getFlag(MODULE_ID, 'award');
+    if (!stored || stored.systemId !== game.system.id) return;
+    const award = JSON.parse(JSON.stringify(stored));
+    if (action === 'discard') {
+        if (award.status !== 'pending') return;
+        award.status = 'discarded';
+        await saveAward(message, award);
+        return;
+    }
+    const undo = action === 'undo';
+    if (undo) {
+        if (!['awarded', 'applying', 'undoing'].includes(award.status)) return;
+        award.status = 'undoing';
+    } else {
+        if (action !== 'award' || !['pending', 'applying'].includes(award.status)) return;
+        if (award.status === 'pending') {
+            if (String(requestedAmount).trim() === '') throw new Error('Enter an XP amount.');
+            const amount = Number(requestedAmount);
+            if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('XP must be a non-negative whole number.');
+            award.amount = amount;
+        }
+        award.status = 'applying';
+    }
+    // Persist intent before the first actor update, so refreshes can be recovered.
+    await saveAward(message, award);
+    const leveledUpActorIds = [];
+    for (const entry of award.entries) {
+        delete entry.error;
+        try {
+            const actor = await fromUuid(entry.uuid);
+            if (!actor) throw new Error('Character no longer exists. Restore it to retry.');
+            const receipt = actor.getFlag(MODULE_ID, 'transactions')?.[message.id];
+            if (undo) {
+                if (receipt?.state === 'applied') {
+                    await systemHandler.updatePlayerXP(actor, -receipt.amount, {
+                        id: message.id, value: { state: 'undone', amount: receipt.amount },
+                    });
+                } else if (!receipt && entry.state === 'applied') {
+                    throw new Error('Award receipt missing; check this character manually.');
+                }
+                entry.state = 'undone';
+                entry.leveledUp = false;
+            } else {
+                if (receipt?.state === 'undone') throw new Error('This award has already been undone.');
+                if (receipt?.state !== 'applied') {
+                    const result = await systemHandler.updatePlayerXP(actor, award.amount, {
+                        id: message.id, value: { state: 'applied', amount: award.amount },
+                    });
+                    entry.leveledUp = result.leveledUp;
+                    if (result.leveledUp) leveledUpActorIds.push(actor.id);
+                }
+                entry.amount = receipt?.amount ?? award.amount;
+                entry.state = 'applied';
+            }
+        } catch (error) {
+            entry.error = error.message;
+            console.error(`Auto XP | ${entry.name}`, error);
+        }
+        // Actor XP and its receipt are written atomically by built-in handlers.
+        // If this message save fails, retry reads the receipt and skips that actor.
+        await saveAward(message, award);
+    }
+    if (!award.entries.some(entry => entry.error)) award.status = undo ? 'undone' : 'awarded';
+    await saveAward(message, award);
+    if (award.entries.some(entry => entry.error)) {
+        ui.notifications.warn('Auto XP: Some characters could not be updated. See the award card to retry.');
+    }
+    if (!undo && award.notifyPlayers && leveledUpActorIds.length) {
+        game.socket.emit(`module.${MODULE_ID}`, { type: 'level-up', actorIds: leveledUpActorIds });
+    }
+}
+
+function activateAwardControls(message, html) {
+    if (!game.user.isGM || !message.getFlag(MODULE_ID, 'award')) return;
+    // v10–12 renderChatMessage supplies jQuery; newer versions supply HTMLElement.
+    const root = html instanceof HTMLElement ? html : html?.[0];
+    const controls = root?.querySelector('.auto-xp-gm-controls');
+    if (!controls || controls.dataset.bound) return;
+    controls.dataset.bound = 'true';
+    controls.hidden = false;
+    const authority = isAwardAuthority();
+    controls.querySelectorAll('button, input').forEach(element => { element.disabled = !authority; });
+    controls.addEventListener('click', event => {
+        const button = event.target.closest('[data-auto-xp-action]');
+        if (!button || button.disabled || !isAwardAuthority()) return;
+        const amount = controls.querySelector('.auto-xp-review-amount')?.value;
+        controls.querySelectorAll('button, input').forEach(element => { element.disabled = true; });
+        queueAwardAction(() => performAwardAction(message, button.dataset.autoXpAction, amount))
+            .catch(error => {
+                console.error('Auto XP | Award action failed', error);
+                ui.notifications.error(`Auto XP: ${error.message}`);
+            }).finally(() => {
+                controls.querySelectorAll('button, input').forEach(element => { element.disabled = !isAwardAuthority(); });
+            });
+    });
+}
+
+Hooks.on('renderChatMessage', activateAwardControls);
+Hooks.on('renderChatMessageHTML', activateAwardControls);
 
 async function markCombatProcessed(combat) {
     try {
         await combat.setFlag(MODULE_ID, 'xpAwarded', true);
     } catch (error) {
-        // This can legitimately fail when called on a combat being deleted; log only
-        console.warn('Auto XP Calculator | Unable to store xpAwarded flag (combat may have been deleted)', error);
+        // The durable message ledger remains usable after the combat is deleted.
+        console.warn('Auto XP | Combat deleted; award is tracked on its chat message.', error);
     }
-}
+}

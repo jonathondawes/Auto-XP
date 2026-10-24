@@ -1,6 +1,21 @@
 # Changelog
 
 
+## [Unreleased]
+### Added
+- Optional GM Review mode with editable XP per character, Award XP and Discard.
+- GM-only undo on new XP award cards, retaining later XP gains.
+- Durable chat-message award records and atomic actor receipts for retry/undo.
+- Recoverable partial awards and undo failures with per-character error messages.
+- Automated regression tests and a live Foundry UAT checklist.
+
+### Fixed
+- Elect one active GM to process awards and serialize award actions on that client.
+- Save an award record before updating characters to prevent repeat encounter processing.
+- Reject invalid XP amounts/multipliers and escape character data in chat cards.
+- Expose `AutoXP.SystemHandler` and document the receipt contract for custom handlers.
+- Notify D&D 5e level-up only when a positive award crosses the next-level threshold.
+
 ## [1.3.0] - 2026-05-31
 ### Added
 - Added GM settings: Enable/Disable Auto XP, XP Multiplier, Notify Players, D&D 5e Encounter Multiplier toggle
