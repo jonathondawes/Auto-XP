@@ -40,4 +40,12 @@ and Foundry 13/14 (which use the newer chat rendering hook).
     threshold should not be repeatedly notified by further XP awards.
 
 Record results here or in the PR before release. Automated tests mock Foundry;
-these live integration checks have not yet been performed.
+the full live integration checklist has not yet been completed.
+
+## v1.4.0 validation — 2026-10-25
+
+- Foundry 13.351, Pathfinder 2e 7.10.1, backed-up AV Test world.
+- Confirmed module active and XP Award Mode setting visible in the running world.
+- Maintainer reported the module works after local testing and authorized release.
+- All 17 automated regression tests pass.
+- Full multi-GM/player, failure-recovery, D&D 5e and Foundry 14 checks remain unrecorded.

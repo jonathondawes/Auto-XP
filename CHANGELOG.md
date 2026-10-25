@@ -1,7 +1,7 @@
 # Changelog
 
 
-## [Unreleased]
+## [1.4.0] - 2026-10-25
 ### Added
 - Optional GM Review mode with editable XP per character, Award XP and Discard.
 - GM-only undo on new XP award cards, retaining later XP gains.

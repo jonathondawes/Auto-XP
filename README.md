@@ -41,7 +41,7 @@ A Foundry VTT module that automatically calculates and distributes XP after comb
 
 1. In Foundry VTT, go to the **Add-on Modules** tab
 2. Click **Install Module**
-3. Enter the following URL: `https://github.com/jonathondawes/auto-xp/releases/latest/download/module.zip`
+3. Enter the following URL: `https://github.com/jonathondawes/Auto-XP/raw/main/module.json`
 4. Click **Install**
 5. Enable the module in your world settings
 
@@ -58,7 +58,7 @@ The module works automatically — no configuration required. When a combat ends
 
 > **Note:** Combat must be tracked using the Foundry combat tracker for this module to work correctly.
 
-## Review and undo (development branch)
+## Review and undo
 
 Automatic awarding remains the default. To approve each encounter first, set
 **Game Settings → Auto XP Calculator → XP Award Mode → GM Review**.
@@ -80,8 +80,7 @@ Automatic awarding remains the default. To approve each encounter first, set
 - Keep the chat message: it stores the award and its controls across reloads and
   encounter deletion. Deleting that message removes the built-in undo interface.
   Undo is available for awards created by this version, not historical cards.
-- These controls are not released yet. Existing ZIP files and the v1.3.0 release
-  do not include this feature. Test the source files from this branch in a test world.
+- Review and undo are available from v1.4.0.
 
 ## Configuration
 
