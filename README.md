@@ -151,6 +151,12 @@ Hooks.once('init', () => {
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Donations
+
+Donations welcome to help keep this, and other modules alive. 
+
+<a href="https://www.buymeacoffee.com/jonathondawes" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## Development validation
 
 Run `node --test tests/auto-xp.test.cjs` (Node.js 18+). The tests use mocked Foundry
